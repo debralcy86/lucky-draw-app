@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // minimal init (safe if run multiple times)
+    try { window.Telegram?.WebApp?.expand?.(); } catch {}
+  </script>
+  <meta charset="UTF-8">
+  <title>Lucky Draw Board</title>
+  <style>
+    body { font-family: sans-serif; padding: 1em; }
+    html, body { height: 100%; }
+    main { min-height: 100dvh; }
+    .tabs { margin-bottom: 1em; }
+    .tabs button { margin-right: 5px; padding: 6px 12px; }
+    .tabs button.active { background: #007bff; color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .cell {
+      border: 1px solid #ddd; padding: 8px; text-align: center; border-radius: 8px;
+      transition: background .2s ease, transform .1s ease;
+    }
+    .cell .fig { font-weight: 600; font-size: 14px; opacity: .8; }
+    .cell .total { font-weight: 700; font-size: 16px; margin-top: 2px; }
+    .cell.winner { outline: 2px solid #22c55e; box-shadow: 0 0 0 3px #bbf7d0 inset; }
+    .meta { margin: .25rem 0 .75rem; color:#0ea5e9; font-weight:600; }
+    .summary { margin:.5rem 0 1rem; color:#475569; }
+  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <meta name="robots" content="noindex" />
+  <script type="module" src="/web/_tg.js"></script>
+</head>
+<body>
+  <h1>Live Board</h1>
+
+  <!-- Group Tabs -->
+  <div class="tabs">
+    <button data-group="A" class="active">Group A</button>
+    <button data-group="B">Group B</button>
+    <button data-group="C">Group C</button>
+    <button data-group="D">Group D</button>
+  </div>
+
+  <!-- Draw Info -->
+  <div id="drawInfo">Loading...</div>
+  <div id="summary" class="summary"></div>
+
+  <!-- Board Grid -->
+  <div class="grid" id="boardGrid"></div>
+
+  <div style="margin-top:16px;">
+    <button id="btn-reload-snapshot">Reload Snapshot</button>
+  </div>
+  <pre id="snapshot" style="background:#f0f4f8;border:1px solid #ccd5e0;border-radius:8px;padding:12px;white-space:pre-wrap;max-height:300px;overflow:auto;">Loading…</pre>
+  <div id="live" style="margin-top:16px; display:flex; flex-direction:column; gap:8px;"></div>
+
+  <div id="live"></div>
+
+  <script>
+  const API_BASE = "https://lucky-draw-web.vercel.app/api/board";
+  console.log('TAG: board-02');
+  let currentGroup = "A";
+  let latest = null;
+
+  function heatColor(v, max) {
+    if (max <= 0) return "#fff";
+    const t = Math.min(1, v / max);
+    const r = Math.round(255 - 120 * t);
+    const g = Math.round(255 - 200 * t);
+    const b = Math.round(255 - 255 * t);
+    return `rgb(${r},${g},${b})`; // white → light red
+  }
+
+  async function fetchBoard() {
+    const res = await fetch(API_BASE, { cache: "no-store" });
+    latest = await res.json();
+    if (!latest.ok) {
+      document.getElementById('drawInfo').innerText = "Error loading board";
+      return;
+    }
+    renderBoard(latest, currentGroup);
+  }
+
+  function renderBoard(data, group) {
+    // header
+    const { draw, groups, grand_total } = data;
+    document.getElementById('drawInfo').innerHTML =
+      `<div class="meta">Draw <b>${draw.code}</b> — status: <b>${draw.status}</b>${draw.winning_figure ? ` — winning: <b>${draw.winning_figure}</b>` : ''}</div>`;
+
+    // group totals
+    const groupRows = groups[group];                        // 36 items
+    const groupTotal = groupRows.reduce((s, r) => s + r.total, 0);
+    document.getElementById('summary').innerHTML =
+      `Group <b>${group}</b> total: <b>${groupTotal}</b> • Grand total (A–D): <b>${grand_total}</b>`;
+
+    // grid
+    const grid = document.getElementById('boardGrid');
+    grid.innerHTML = '';
+
+    const maxInGroup = Math.max(0, ...groupRows.map(r => r.total));
+    const winner = draw.winning_figure || null;
+
+    groupRows.forEach(r => {
+      const div = document.createElement('div');
+      div.className = "cell";
+      if (winner && Number(r.figure) === Number(winner)) div.classList.add('winner');
+      div.style.background = heatColor(r.total, maxInGroup);
+      div.innerHTML = `<div class="fig">${r.figure}</div><div class="total">${r.total}</div>`;
+      grid.appendChild(div);
+    });
+  }
+
+  // Tab switching
+  document.querySelectorAll('.tabs button').forEach(btn => {
+    btn.addEventListener('click', e => {
+      document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      currentGroup = e.target.dataset.group;
+      if (latest?.ok) renderBoard(latest, currentGroup); else fetchBoard();
+    });
+  });
+
+  // Initial load + refresh every 10s
+  fetchBoard();
+  setInterval(fetchBoard, 10000);
+  </script>
+
+</script>
+
+  <div class="tag" style="margin-top:10px; font-size:12px; opacity:.7">
+    v: board-02 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script>
+  </div>
+
+  <script>
+    // Ensure Telegram WebApp uses full height (safety net)
+    (function() {
+      function expandIfReady() {
+        try {
+          if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+          }
+        } catch (e) {}
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', expandIfReady);
+      } else {
+        expandIfReady();
+      }
+    })();
+  </script>
+<script type="module">
+  import { requireTelegramBanner } from '/web/_guard.js';
+  requireTelegramBanner();
+</script>
+<script type="module">
+  // Backend handlers: projects/api/handlers/board.mjs (snapshot), board-stream.mjs (live)
+  async function getJSON(url) {
+    const r = await fetch(url);
+    let j = {}; try { j = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, json: j };
+  }
+
+  const snap = document.getElementById('snapshot');
+  const live = document.getElementById('live');
+  const btnReload = document.getElementById('btn-reload-snapshot');
+
+  async function loadSnapshot() {
+    if (!snap) return;
+    snap.textContent = 'Loading…';
+    const { ok, json } = await getJSON('/api/board');
+    if (!ok) { snap.textContent = json?.error || 'Failed'; return; }
+    snap.textContent = JSON.stringify(json, null, 2);
+  }
+
+  function startStream() {
+    if (!live || !window.EventSource) return;
+    const es = new EventSource('/api/board-stream');
+    es.addEventListener('message', (ev) => {
+      try {
+        const d = JSON.parse(ev.data || '{}');
+        const p = document.createElement('pre');
+        p.textContent = JSON.stringify(d, null, 2);
+        live.prepend(p);
+        // cap entries
+        while (live.childElementCount > 50) live.lastChild?.remove();
+      } catch {}
+    });
+    es.onerror = () => { /* silent retry */ };
+  }
+
+  btnReload?.addEventListener('click', loadSnapshot);
+  loadSnapshot();
+  startStream();
+</script>
+</body>
+</html>

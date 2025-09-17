@@ -1,0 +1,13 @@
+{
+  "name": "myproject-api-runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node api/server.mjs",
+    "dev": "PORT=3001 node api/server.mjs",
+    "dev:api": "PORT=3001 node api/server.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

@@ -1,0 +1,18 @@
+# macOS + logs
+.DS_Store
+projects/.server.log
+projects/.server.pid
+
+# env & secrets
+projects/.env*
+.env*
+*.local
+
+# deps & builds
+node_modules/
+projects/node_modules/
+dist/
+build/
+out/
+coverage/
+.vercel

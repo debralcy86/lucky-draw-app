@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // minimal init (safe if run multiple times)
+    try { window.Telegram?.WebApp?.expand?.(); } catch {}
+  </script>
+  <meta charset="utf-8"/>
+  <title>Whoami Debug</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body{font-family:ui-sans-serif,system-ui;-apple-system,Segoe UI,Roboto,Arial;padding:16px;background:#0b0f14;color:#e6edf3}
+    pre{background:#111827;padding:12px;border-radius:8px;overflow:auto}
+    button{padding:8px 12px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+  <h1>Whoami Debug</h1>
+  <p>Open this page <b>from Telegram</b>. It will POST your <code>initData</code> to <code>/api/whoami</code> and show the raw JSON.</p>
+  <button id="btn">Call /api/whoami</button>
+  <pre id="out">Awaiting action…</pre>
+  <script>
+    const out = document.getElementById('out');
+    const btn = document.getElementById('btn');
+
+    function getInitData() {
+      try {
+        const tg = window?.Telegram?.WebApp;
+        if (tg?.initData) return tg.initData;
+        const href = String(location.href);
+        const H = '#tgWebAppData=';
+        const hIdx = href.indexOf(H);
+        if (hIdx >= 0) return href.slice(hIdx + H.length);
+        const qIdx = href.indexOf('?');
+        if (qIdx >= 0) {
+          const end = href.indexOf('#');
+          const search = href.slice(qIdx + 1, end >= 0 ? end : href.length);
+          const m = search.match(/(?:^|&)tgWebAppData=([^&]+)/);
+          if (m) return m[1];
+        }
+      } catch {}
+      return '';
+    }
+
+    async function run() {
+      out.textContent = 'Loading…';
+      const initData = getInitData();
+      try {
+        const res = await fetch('/api/whoami'.replace('/handlers/', '/'), { // normalize if routed
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `tma ${initData || ''}` },
+          body: JSON.stringify({ initData })
+        });
+        const txt = await res.text();
+        out.textContent = `HTTP ${res.status}\n${txt}`;
+      } catch (e) {
+        out.textContent = 'Error: ' + (e?.message || e);
+      }
+    }
+
+    btn.addEventListener('click', run);
+  </script>
+<script type="module">
+  import { whoAmI, getInitData } from '/web/_api.js';
+
+  const out = document.getElementById('out');
+
+  (async () => {
+    const initData = getInitData();
+    const resp = await whoAmI();
+    const data = {
+      initDataPreview: (initData || '').slice(0, 120) + (initData?.length > 120 ? '…' : ''),
+      whoAmI: resp.json || {}
+    };
+    if (out) out.textContent = JSON.stringify(data, null, 2);
+  })();
+</script>
+</body>
+</html>

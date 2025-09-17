@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <script>
+    (function(){
+      var next = '/web/bet.html';
+      var qs = location.search || '';
+      var hash = location.hash || '';
+      // Avoid loops if already on /web/*
+      if (!location.pathname.startsWith('/web/')) {
+        location.replace(next + qs + hash);
+      }
+    })();
+  </script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // minimal init (safe if run multiple times)
+    try { window.Telegram?.WebApp?.expand?.(); } catch {}
+  </script>
+  <meta charset="utf-8" />
+  <title>Lucky Draw Web – Router</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <style>
+    html, body { height: 100%; }
+    body { min-height: 100dvh; }
+  </style>
+</head>
+<body>
+  <a id="goAdmin" href="/web/admin.html" style="display:none;position:fixed;bottom:16px;right:16px;padding:8px 12px;background:#333;color:#fff;border-radius:4px;font-size:14px;text-decoration:none;z-index:1000">Go Admin</a>
+  <script type="module">
+    import { getInitData, getStartParam, showNoTelegramBanner } from "/web/_tg.js";
+    console.log('TAG: index-02');
+    async function checkAdmin() {
+      try {
+        const initData = getInitData();
+        const res = await fetch("/api/whoami", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData })
+        });
+        const data = await res.json();
+        if (data.ok && data.admin) {
+          document.getElementById("goAdmin").style.display = "block";
+        }
+      } catch (e) {
+        console.warn("Admin check failed", e);
+      }
+    }
+    checkAdmin();
+  </script>
+  <script>
+    // Ensure Telegram WebApp uses full height (safety net)
+    (function() {
+      function expandIfReady() {
+        try {
+          if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+          }
+        } catch (e) {}
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', expandIfReady);
+      } else {
+        expandIfReady();
+      }
+    })();
+  </script>
+  <div class="tag" style="margin:12px; font-size:12px; opacity:.7">
+    v: index-02 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script>
+  </div>
+</body>
+</html>

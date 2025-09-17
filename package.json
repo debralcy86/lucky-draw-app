@@ -1,0 +1,14 @@
+{
+  "name": "lucky-draw-web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "@telegram-apps/init-data-node": "^2.0.10",
+    "vercel": "^47.0.6"
+  },
+  "scripts": {
+    "verify:init": "node verifyInitData.test.js",
+    "gen:init": "node scripts/gen-initdata.mjs"
+  }
+}
