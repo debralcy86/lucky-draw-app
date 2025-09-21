@@ -9,6 +9,10 @@
   },
   "scripts": {
     "verify:init": "node verifyInitData.test.js",
-    "gen:init": "node scripts/gen-initdata.mjs"
+    "gen:init": "node scripts/gen-initdata.mjs",
+    "bootstrap": "npm install --prefix projects-app",
+    "build:web": "npm run build --prefix projects-app",
+    "build": "npm run build:web",
+    "deploy:vercel": "npm run build && vercel deploy --prod --prebuilt"
   }
 }
