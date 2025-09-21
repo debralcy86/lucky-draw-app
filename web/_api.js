@@ -63,12 +63,12 @@ export async function createWithdraw({ amount, note = '' }) {
 }
 
 export async function saveProfile(profile = {}) {
-  // backend: projects/api/handlers/profile.mjs
+  // backend: projects-app/api/handlers/profile.mjs
   return postJSON('/api/profile', { initData: getInitData(), ...profile });
 }
 
 export async function adminCredit({ userId, amount, note = '' }) {
-  // backend: projects/api/handlers/admin-credit.mjs (admin only)
+  // backend: projects-app/api/handlers/admin-credit.mjs (admin only)
   return postJSON('/api/admin-credit', { initData: getInitData(), userId, amount, note });
 }
 
@@ -93,11 +93,11 @@ export async function adminTxns({ userId, limit = 20, offset = 0 } = {}) {
 }
 
 export async function listMyWithdrawRequests() {
-  // backend: projects/api/handlers/withdraw-request.mjs (assumed: GET lists user's requests)
+  // TODO: implement when /api/withdraw-request is restored (currently use withdraw-create flow)
   return getJSON(location.origin + '/api/withdraw-request');
 }
 
 export async function adminDrawExec() {
-  // backend: projects/api/handlers/admin-draw-exec.mjs
+  // backend: projects-app/api/handlers/admin-draw-exec.mjs
   return postJSON('/api/admin-draw-exec', { initData: getInitData() });
 }

@@ -157,7 +157,7 @@
   requireTelegramBanner();
 </script>
 <script type="module">
-  // Backend handlers: projects/api/handlers/board.mjs (snapshot), board-stream.mjs (live)
+  // Backend handlers: projects-app/api/handlers/board.mjs (snapshot), board-stream.mjs (live)
   async function getJSON(url) {
     const r = await fetch(url);
     let j = {}; try { j = await r.json(); } catch {}

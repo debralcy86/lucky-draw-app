@@ -1,3 +1,3 @@
-// DEPRECATED: use /api/router.mjs → ./projects/api/handlers/board-stream.mjs
-export { default } from './projects/api/handlers/board-stream.mjs';
+// Legacy proxy to the board-stream handler
+export { default } from './projects-app/api/handlers/board-stream.mjs';
 export const config = { runtime: 'nodejs' };
