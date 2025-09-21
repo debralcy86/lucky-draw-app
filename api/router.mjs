@@ -18,6 +18,9 @@ import { adminWithdrawUpdate } from '../projects-app/api/handlers/admin-withdraw
 import profile from '../projects-app/api/handlers/profile.mjs';
 import * as Whoami from '../projects-app/api/handlers/whoami.mjs';
 import DebugInitEcho from '../projects-app/api/handlers/debug-init-echo.mjs';
+import botAdminCredit from '../projects-app/api/handlers/botAdmin.mjs';
+import botWithdrawUpdate from '../projects-app/api/handlers/botWithdraw.mjs';
+import postDrawMessage from '../projects-app/api/handlers/postDraw.mjs';
 
 
 function sendJson(res, status, obj) {
@@ -32,7 +35,7 @@ function sendPreflight(res) {
   res.statusCode = 200;
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID, X-Cron-Key');
   return res.end();
 }
 
@@ -48,6 +51,17 @@ export default async function handler(req, res) {
 
   try {
     // Allow direct pathname routing for specific handlers
+    if (pathname === '/api/bot/admin-credit') {
+      return botAdminCredit(req, res);
+    }
+
+    if (pathname === '/api/bot/admin-withdraw-update') {
+      return botWithdrawUpdate(req, res);
+    }
+
+    if (pathname === '/api/post-draw') {
+      return postDrawMessage(req, res);
+    }
     if (pathname === '/api/profile') {
       return profile(req, res);
     }
