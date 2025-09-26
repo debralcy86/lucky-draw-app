@@ -1,26 +1,23 @@
 import { parse } from 'node:url';
 
-import * as Bet from '../projects-app/api/bet.mjs';
-import * as Balance from '../projects-app/api/handlers/data-balance.mjs';
-import * as AdminCredit from '../projects-app/api/handlers/admin-credit.mjs';
-import * as AdminMetrics from '../projects-app/api/handlers/admin-metrics.mjs';
-import * as AdminTxns from '../projects-app/api/handlers/admin-txns.mjs';
-import * as AdminDrawExec from '../projects-app/api/handlers/admin-draw-exec.mjs';
-import * as Board from '../projects-app/api/handlers/board.mjs';
-import * as BoardStream from '../projects-app/api/handlers/board-stream.mjs';
-import * as OpenDraw from '../projects-app/api/handlers/open-draw.mjs';
-import * as Scheduler from '../projects-app/api/draw-scheduler.mjs';
-import * as Profile from '../projects-app/api/handlers/profile.mjs';
-import { withdrawCreate } from '../projects-app/api/handlers/withdraw-create.mjs';
-import { adminWithdraws } from '../projects-app/api/handlers/admin-withdraws.mjs';
-import { adminWithdrawUpdate } from '../projects-app/api/handlers/admin-withdraw-update.mjs';
+import * as Bet from '../projects/api/bet.mjs';
+import * as Balance from '../projects/api/handlers/data-balance.mjs';
+import * as AdminCredit from '../projects/api/handlers/admin-credit.mjs';
+import * as AdminMetrics from '../projects/api/handlers/admin-metrics.mjs';
+import * as AdminTxns from '../projects/api/handlers/admin-txns.mjs';
+import * as AdminDrawExec from '../projects/api/handlers/admin-draw-exec.mjs';
+import * as Board from '../projects/api/handlers/board.mjs';
+import * as BoardStream from '../projects/api/handlers/board-stream.mjs';
+import * as OpenDraw from '../projects/api/handlers/open-draw.mjs';
+import * as Scheduler from '../projects/api/draw-scheduler.mjs';
+import * as Profile from '../projects/api/handlers/profile.mjs';
+import { withdrawCreate } from '../projects/api/handlers/withdraw-create.mjs';
+import { adminWithdraws } from '../projects/api/handlers/admin-withdraws.mjs';
+import { adminWithdrawUpdate } from '../projects/api/handlers/admin-withdraw-update.mjs';
 // Also import defaults for direct calls by full pathname
-import profile from '../projects-app/api/handlers/profile.mjs';
-import * as Whoami from '../projects-app/api/handlers/whoami.mjs';
-import DebugInitEcho from '../projects-app/api/handlers/debug-init-echo.mjs';
-import botAdminCredit from '../projects-app/api/handlers/botAdmin.mjs';
-import botWithdrawUpdate from '../projects-app/api/handlers/botWithdraw.mjs';
-import postDrawMessage from '../projects-app/api/handlers/postDraw.mjs';
+import profile from '../projects/api/handlers/profile.mjs';
+import * as Whoami from '../projects/api/handlers/whoami.mjs';
+import DebugInitEcho from '../projects/api/handlers/debug-init-echo.mjs';
 
 
 function sendJson(res, status, obj) {
@@ -35,7 +32,7 @@ function sendPreflight(res) {
   res.statusCode = 200;
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID, X-Cron-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID');
   return res.end();
 }
 
@@ -51,17 +48,6 @@ export default async function handler(req, res) {
 
   try {
     // Allow direct pathname routing for specific handlers
-    if (pathname === '/api/bot/admin-credit') {
-      return botAdminCredit(req, res);
-    }
-
-    if (pathname === '/api/bot/admin-withdraw-update') {
-      return botWithdrawUpdate(req, res);
-    }
-
-    if (pathname === '/api/post-draw') {
-      return postDrawMessage(req, res);
-    }
     if (pathname === '/api/profile') {
       return profile(req, res);
     }

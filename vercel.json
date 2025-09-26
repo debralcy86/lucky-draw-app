@@ -1,13 +1,17 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "projects-app/package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "build" }
-    }
-  ],
-  "routes": [
-    { "src": "/(.*)", "dest": "/index.html" }
+  "installCommand": "npm ci --prefix projects-app || npm install --prefix projects-app",
+  "buildCommand": "CI= npm run build --prefix projects-app",
+  "outputDirectory": "projects-app/build",
+  "rewrites": [
+    { "source": "/api/admin-withdraws", "destination": "/api/admin?path=withdraws" },
+    { "source": "/api/admin-withdraw-update", "destination": "/api/admin?path=withdraw-update" },
+    { "source": "/api/admin-txns", "destination": "/api/admin?path=txns" },
+    { "source": "/api/withdraw-request", "destination": "/api/admin?path=withdraw-request" },
+    { "source": "/api/board-stream", "destination": "/api/board?path=stream" },
+    { "source": "/api/admin/(.*)", "destination": "/api/admin?path=$1" },
+    { "source": "/api/board/(.*)", "destination": "/api/board?path=$1" },
+    { "source": "/web/(.*)", "destination": "/web/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

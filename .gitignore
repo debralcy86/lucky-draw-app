@@ -16,3 +16,4 @@ build/
 out/
 coverage/
 .vercel
+.env*.local

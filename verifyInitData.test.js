@@ -1,63 +1,60 @@
-// verifyInitData.test.js
-// Usage examples:
-//   BOT_TOKEN=123456:AA.... INIT_DATA="query_id=...&user=...&auth_date=...&hash=..." npm run verify:init
-//   BOT_TOKEN=123456:AA.... npm run verify:init -- "tma query_id=...&user=...&auth_date=...&hash=..."
-//   BOT_TOKEN=123456:AA.... npm run verify:init -- "query_id=...&user=...&auth_date=...&hash=..."
+// verifyInitData.test.js — clean CLI verifier
+// Usage:
+//   BOT_TOKEN=123456:AA... INIT_DATA="user=...&auth_date=...&hash=..." node verifyInitData.test.js
+//   BOT_TOKEN=123456:AA... node verifyInitData.test.js "tma user=...&auth_date=...&hash=..."
+//   BOT_TOKEN=123456:AA... node verifyInitData.test.js "Authorization: tma user=...&auth_date=...&hash=..."
 
-// Prefer @telegram-apps/init-data-node for CLI to avoid ESM resolver issues
 import { validate } from '@telegram-apps/init-data-node';
 
-const token = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
+function stripWrapper(s = '') {
+  let x = s.trim();
+  if (x.startsWith('Authorization:')) x = x.slice('Authorization:'.length).trim();
+  if (x.startsWith('tma ')) x = x.slice(4).trim();
+  return x;
+}
+
+const token =
+  (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
+
 if (!token) {
   console.error('Missing bot token. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN.');
   process.exit(1);
 }
 
-import { validate } from 'telegram-web-app-init-data';
-import dotenv from 'dotenv';
-dotenv.config();
-
-function extractInitDataFromArg(arg = '') {
-  const initDataRaw = process.argv[2];
-  const botToken = process.env.BOT_TOKEN;
-  const initData = validate(initDataRaw, botToken);
-
-  console.log({ initDataRaw, initData, botToken });
-}
-
-try {
-  const result = validate(initDataRaw, botToken);
-  const userId = result.user?.id;
-  const username = result.user?.username;
-
-  if (userId === '123456789') { // Replace with your actual admin ID
-    console.log('✅ Admin verified:', username);
-  } else {
-    console.log('👤 Regular user:', username);
-  }
-} catch (err) {
-  console.error('❌ Verification failed:', err.message);
+const arg = process.argv[2] || process.env.INIT_DATA || '';
+const raw = stripWrapper(arg);
+if (!raw) {
+  console.error('Missing INIT_DATA (arg or env).');
+  process.exit(2);
 }
 
 const botId = token.split(':')[0] || 'unknown';
-const preview = initDataRaw.slice(0, 50);
-console.log('TAG: verify-start', { bot_id: botId, token_len: token.length, init_len: initDataRaw.length, preview });
+console.log('TAG: verify-start', {
+  bot_id: botId,
+  token_len: token.length,
+  init_len: raw.length,
+  preview: raw.slice(0, 80)
+});
 
 try {
-  await validate(initDataRaw, token);
-  const p = new URLSearchParams(initDataRaw);
+  // Throws on failure
+  await validate(raw, token);
+
+  const p = new URLSearchParams(raw);
   let user = null;
-  try { user = p.get('user') ? JSON.parse(decodeURIComponent(p.get('user'))) : null; } catch {}
+  try {
+    user = p.get('user') ? JSON.parse(decodeURIComponent(p.get('user'))) : null;
+  } catch {}
+
+  // Dump all fields for clarity
+  const all = {};
+  for (const [k, v] of p.entries()) all[k] = v;
+
   console.log('✅ Verified');
   console.log('User:', user);
-
-  // Dump all initData fields for full visibility
-  const all = {};
-  for (const [k, v] of p.entries()) {
-    all[k] = v;
-  }
   console.log('All initData fields:', all);
+  process.exit(0);
 } catch (err) {
   console.error('❌ Verification failed:', err?.message || String(err));
-  process.exit(2);
+  process.exit(3);
 }

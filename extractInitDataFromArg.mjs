@@ -1,13 +1,13 @@
-import { validate } from '@telegram-apps/init-data-node';
-import dotenv from 'dotenv';
-dotenv.config();
+// extractInitDataFromArg.mjs — return RAW initData without stripping fields
+export default function extractInitDataFromArg(req = {}, body = {}) {
+  const h = req.headers || {};
+  const auth = (h.authorization || h.Authorization || '').toString().trim();
 
-const initDataRaw = process.argv[2];
-const botToken = process.env.BOT_TOKEN;
+  const fromHeader = auth.startsWith('tma ') ? auth.slice(4).trim() : '';
+  const fromBodyA = typeof body.initData === 'string' ? body.initData.trim() : '';
+  const fromBodyB = typeof body.tgWebAppData === 'string' ? body.tgWebAppData.trim() : '';
+  const fromXHeader =
+    (h['x-telegram-webapp-init-data'] || h['x-telegram-init-data'] || '').toString().trim();
 
-try {
-  const result = validate(initDataRaw, botToken);
-  console.log('✅ Verified:', result.user);
-} catch (err) {
-  console.error('❌ Verification failed:', err.message);
+  return fromHeader || fromBodyA || fromBodyB || fromXHeader || '';
 }
