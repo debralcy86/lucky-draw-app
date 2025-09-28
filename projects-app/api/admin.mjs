@@ -9,6 +9,7 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Expose-Headers','Content-Type');
 }
 function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
 function bad(res, error) { return res.status(400).json({ ok: false, reason: error }); }
