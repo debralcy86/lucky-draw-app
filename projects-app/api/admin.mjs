@@ -94,6 +94,7 @@ export default async function handler(req, res) {
 
   if (action === 'credit') {
     const userId = String(body.userId || '').trim();
+const txType = (delta >= 0) ? 'credit' : 'debit';
     const delta = Number(body.delta);
     const note = (body.note == null ? '' : String(body.note)).slice(0, 200);
     if (!userId) return bad(res, 'missing_user');
