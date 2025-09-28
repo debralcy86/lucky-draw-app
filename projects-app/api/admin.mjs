@@ -117,12 +117,8 @@ export default async function handler(req, res) {
       if (wSet.error) return err(res, 'wallet_update_failed');
     }
 
-    const txn = await supabase.from('wallet_txns').insert({
-      user_id: userId,
-      delta,
-      note,
-    });
-    if (txn.error) return err(res, 'txn_insert_failed');
+    const txn = await supabase.from('wallet_txns').insert([{ user_id: userId, delta, note: (note && note.length) ? note : null }]).select('id').maybeSingle();
+if (txn.error) { console.error('admin.credit txn error', txn.error); return err(res, 'txn_insert_failed'); }
 
     const wNow = await supabase.from('wallets').select('user_id,balance').eq('user_id', userId).maybeSingle();
     if (wNow.error) return err(res, 'wallet_fetch_failed');
