@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lucky Draw — Home</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --fg:#e7eef7; --muted:#9fb3c8; --accent:#5aa9ff; --card:#111822; --btn:#1b2533;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+    header{padding:20px 16px;border-bottom:1px solid #1e2a3a;background:linear-gradient(180deg,#0e141d 0%, #0b0f14 100%)}
+    .title{font-size:18px;font-weight:700;margin:0}
+    .subtitle{margin:4px 0 0;color:var(--muted);font-size:12px}
+    main{padding:16px;max-width:680px;margin:0 auto}
+    .card{background:var(--card);border:1px solid #1f2a3a;border-radius:12px;padding:14px;margin-bottom:14px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .btn{appearance:none;border:1px solid #2a394d;background:var(--btn);color:var(--fg);
+         border-radius:10px;padding:12px 16px;font-weight:600;font-size:14px;cursor:pointer}
+    .btn:active{transform:translateY(1px)}
+    .kpi{display:flex;justify-content:space-between;gap:8px;font-size:14px}
+    .muted{color:var(--muted)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .tag{display:inline-block;border:1px solid #2a394d;border-radius:8px;padding:2px 8px;font-size:11px;color:var(--muted)}
+    footer{padding:10px 16px;color:var(--muted);font-size:11px;border-top:1px solid #1e2a3a}
+    .ver{float:right}
+  </style>
+</head>
+<body>
+  <header>
+    <h1 class="title">Lucky Draw — User</h1>
+    <p class="subtitle">Open the wallet or place a bet. This screen is user-only.</p>
+  </header>
+  <main>
+    <section class="card" id="openDrawCard">
+      <div class="kpi">
+        <div>
+          <div class="muted">Open Draw</div>
+          <div id="odSummary" class="mono">loading…</div>
+        </div>
+        <div>
+          <span id="odTag" class="tag">fetching</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <button id="btnWallet" class="btn">Wallet</button>
+        <button id="btnBet" class="btn">Place Bet</button>
+      </div>
+      <p class="muted" style="margin-top:10px">
+        Tip: If you’re an admin, use <span class="mono">/admin</span> in Telegram to open the admin screen from chat.
+      </p>
+    </section>
+  </main>
+  <footer>
+    <span id="tgCtx" class="mono muted">tg: checking…</span>
+    <span class="ver">v-2025-09-22-01</span>
+  </footer>
+
+  <script>
+    // Minimal helpers
+    const MYT = new Intl.DateTimeFormat('en-MY',{dateStyle:'medium', timeStyle:'short'});
+    const $ = sel => document.querySelector(sel);
+
+    // Telegram context (user-side only)
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    if (tg) {
+      try { tg.expand && tg.expand(); } catch {}
+      $('#tgCtx').textContent = 'tg: webapp ' + (tg.initDataUnsafe?.user?.id ? ('userId='+tg.initDataUnsafe.user.id) : '(no user)');
+    } else {
+      $('#tgCtx').textContent = 'tg: not in telegram (browser)';
+    }
+
+    // Nav buttons (front only)
+    $('#btnWallet').onclick = () => {
+      location.href = 'telegram-wallet.html?v=2025-09-22-01';
+    };
+    $('#btnBet').onclick = () => {
+      location.href = 'bet.html?v=2025-09-22-01';
+    };
+
+    // Pull Open Draw (front only; no secret required)
+    async function fetchOpenDraw() {
+      try {
+        const r = await fetch('/api/open-draw', { method:'GET' });
+        const j = await r.json();
+        if (!r.ok || !j) throw new Error(j?.error || 'fetch_failed');
+        const g = j?.group || j?.data?.group || '—';
+        // choose a reasonable close time field if available
+        const closeISO = j?.close_at || j?.closeAt || j?.data?.close_at || j?.data?.closeAt || null;
+        const closeTxt = closeISO ? MYT.format(new Date(closeISO)) : 'unknown';
+        $('#odSummary').textContent = `Group ${g} • closes ${closeTxt}`;
+        $('#odTag').textContent = j?.id ? `id ${j.id.toString().slice(0,8)}…` : 'active';
+      } catch(e) {
+        $('#odSummary').textContent = 'No active draw';
+        $('#odTag').textContent = 'none';
+      }
+    }
+    fetchOpenDraw();
+  </script>
+</body>
+</html>
