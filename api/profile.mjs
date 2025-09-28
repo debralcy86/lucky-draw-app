@@ -74,7 +74,7 @@ export default async function profile(req, res) {
     .split(',')[0]
     .trim() || '*';
   res.setHeader('Access-Control-Allow-Origin', allowOrigin || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);
 
   if (req.method === 'OPTIONS') {
@@ -82,7 +82,7 @@ export default async function profile(req, res) {
     return res.end();
   }
 
-  if (req.method !== 'POST') {
+  if (req.method !== 'GET' && req.method !== 'POST') {
     return send(res, 405, { ok: false, error: 'Method Not Allowed', rid: requestId });
   }
 

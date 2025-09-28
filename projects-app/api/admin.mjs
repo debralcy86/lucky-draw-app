@@ -65,7 +65,10 @@ export default async function handler(req, res) {
           balance_after: newBalance,
           note: note || `admin ${type}`
         });
-        if (tErr) { console.error("[admin credit] wallet_txns insert error:", tErr); return res.status(500).json({ ok: false, reason: "txn_insert_failed", message: tErr.message || String(tErr), code: tErr.code || null, details: tErr.details || null, hint: tErr.hint || null }); }
+        if (tErr) {
+          console.error('[admin credit] wallet_txns insert error:', tErr);
+          return res.status(500).json({ ok: false, reason: 'txn_insert_failed' });
+        }
 
         return res.status(200).json({ ok: true, tag, action, type, amount, balance: newBalance });
       }
