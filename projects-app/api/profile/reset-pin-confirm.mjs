@@ -1,10 +1,25 @@
 export const config = { runtime: 'nodejs' };
 import crypto from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { createClient } from '@supabase/supabase-js';
 import verifyInitData, { verifyTelegramInitData } from '../_lib/telegramVerify.mjs';
 
 function sha(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 function hashPin(pin, userId) { return crypto.createHash('sha256').update(`${pin}:${userId}`).digest('hex'); }
+
+async function readJSON(rq) {
+  if (rq && typeof rq.json === 'function') {
+    try { return await rq.json(); } catch {}
+  }
+  try {
+    const chunks = [];
+    for await (const chunk of rq) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString('utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return null;
+  }
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -27,10 +42,12 @@ export default async function handler(req, res) {
   const userId = String(check.userId || check.user?.id || check.user?.user?.id || '');
   if (!userId) return res.status(400).json({ ok: false, error: 'invalid_user' });
 
-  let body = {};
-  try { body = await req.json(); } catch { return res.status(400).json({ ok: false, error: 'invalid_json' }); }
-  const code = String(body?.code || '').trim();
-  const newPin = String(body?.newPin || '').trim();
+  const body = await readJSON(req);
+  if (!body || typeof body !== 'object') {
+    return res.status(400).json({ ok: false, error: 'invalid_json' });
+  }
+  const code = String(body.code || '').trim();
+  const newPin = String(body.newPin || '').trim();
 
   if (!/^[0-9]{6}$/.test(code)) return res.status(400).json({ ok: false, error: 'invalid_code' });
   if (!/^[0-9]{4,6}$/.test(newPin)) return res.status(400).json({ ok: false, error: 'invalid_pin' });
