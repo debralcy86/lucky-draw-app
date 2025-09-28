@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 export const config = { runtime: 'nodejs' };
 
 import { createClient } from '@supabase/supabase-js';

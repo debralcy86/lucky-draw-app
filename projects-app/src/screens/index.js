@@ -209,7 +209,7 @@ export function WelcomeScreen({ onNavigate, debug = false }) {
 }
 
 export function LoginScreen({ onNavigate, debug = false }) {
-  const { setAuth } = useAppState();
+  const { setAuth, setWalletData } = useAppState();
   const [edit, setEdit] = useState(false);
   // Auto-generated user id display (non-interactive field)
   const [userId, setUserId] = useState('');
@@ -223,6 +223,43 @@ export function LoginScreen({ onNavigate, debug = false }) {
   const [saving, setSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+
+  const loadWalletAndHistory = useCallback(async (initDataValue, options = {}) => {
+    const { silent = false, fallbackUserId = '' } = options || {};
+    if (!initDataValue) return null;
+    try {
+      const res = await fetch('/api/data-balance', {
+        method: 'GET',
+        headers: {
+          'Authorization': 'tma ' + initDataValue,
+        },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (!silent) {
+          setErrorMessage(json?.error ? `Balance fetch failed: ${json.error}` : 'Balance fetch failed.');
+        }
+        if (debug) {
+          console.log('data-balance response (error)', { status: res.status, json });
+        }
+        return null;
+      }
+      const walletPayload = json?.wallet || (fallbackUserId ? { user_id: fallbackUserId, balance: 0 } : null);
+      const txnsPayload = Array.isArray(json?.txns) ? json.txns : [];
+      if (walletPayload || txnsPayload.length) {
+        setWalletData({ wallet: walletPayload, txns: txnsPayload });
+      }
+      return { wallet: walletPayload, txns: txnsPayload };
+    } catch (err) {
+      if (!silent) {
+        setErrorMessage('Unable to load wallet data.');
+      }
+      if (debug) {
+        console.log('data-balance fetch exception', err);
+      }
+      return null;
+    }
+  }, [debug, setWalletData, setErrorMessage]);
 
   // Prefill userId + profile from cache → Telegram → backend
   useEffect(() => {
@@ -323,6 +360,23 @@ export function LoginScreen({ onNavigate, debug = false }) {
         } else {
           setStatusMessage('No profile found. Please register to continue.');
         }
+
+        const profileForAuth = json?.profile || null;
+        if (resolvedUserId) {
+          setAuth({
+            userId: resolvedUserId,
+            name: profileForAuth?.name || '',
+            contact: profileForAuth?.contact || '',
+            status: exists ? 'verified' : 'pending',
+            profile: profileForAuth,
+          });
+        }
+
+        if (json?.wallet) {
+          setWalletData({ wallet: json.wallet, txns: [] });
+        }
+
+        await loadWalletAndHistory(initData, { silent: true, fallbackUserId: resolvedUserId || '' });
       } catch (e) {
         if (!alive) return;
         const message = e?.message ? String(e.message) : String(e);
@@ -339,7 +393,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
     })();
 
     return () => { alive = false; };
-  }, [debug]);
+  }, [debug, loadWalletAndHistory, setAuth, setWalletData]);
 
   function genUserId() {
     // Simple readable ID: U + yyyymmdd + - + 6 random base36 chars
@@ -419,7 +473,18 @@ export function LoginScreen({ onNavigate, debug = false }) {
     if (profileExists === true) {
       setStatusMessage('Logged in. Redirecting to dashboard...');
       setErrorMessage('');
-      setAuth({ userId: actualUserId, name: trimmedName, contact: trimmedContact, status: 'verified' });
+      setAuth({
+        userId: actualUserId,
+        name: trimmedName || name || '',
+        contact: trimmedContact || contact || '',
+        status: 'verified',
+        profile: {
+          user_id: actualUserId,
+          name: trimmedName || name || '',
+          contact: trimmedContact || contact || '',
+        },
+      });
+      await loadWalletAndHistory(initData, { silent: true, fallbackUserId: actualUserId });
       onNavigate('dashboard');
       return;
     }
@@ -451,6 +516,20 @@ export function LoginScreen({ onNavigate, debug = false }) {
       return;
     }
 
+    const savedProfile = out?.json?.profile || { user_id: actualUserId, name: trimmedName, contact: trimmedContact };
+    const savedWallet = out?.json?.wallet || null;
+
+    setAuth({
+      userId: actualUserId,
+      name: savedProfile?.name || trimmedName,
+      contact: savedProfile?.contact || trimmedContact,
+      status: 'registered',
+      profile: savedProfile,
+    });
+    if (savedWallet) {
+      setWalletData({ wallet: savedWallet, txns: out?.json?.txns || [] });
+    }
+
     setHasStoredPin(true);
     setProfileExists(true);
     setStatusMessage('Registration complete. Redirecting to dashboard...');
@@ -458,7 +537,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
     setPin('');
     setSaving(false);
 
-    setAuth({ userId: actualUserId, name: trimmedName, contact: trimmedContact, status: 'registered' });
+    await loadWalletAndHistory(initData, { silent: true, fallbackUserId: actualUserId });
     onNavigate('dashboard');
   }
 
@@ -580,9 +659,34 @@ export function LoginScreen({ onNavigate, debug = false }) {
 }
 
 export function DashboardScreen({ onNavigate, debug = false }) {
-  const { state } = useAppState();
+  const { state, setWalletData } = useAppState();
   const [edit, setEdit] = useState(false);
   const balance = state?.wallet?.balance ?? 0;
+  useEffect(() => {
+    let active = true;
+    const initData = getInitData();
+    if (!initData) return () => { active = false; };
+    (async () => {
+      try {
+        const res = await fetch('/api/data-balance', {
+          method: 'GET',
+          headers: { 'Authorization': 'tma ' + initData },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!active) return;
+        if (res.ok && (json?.wallet || Array.isArray(json?.txns))) {
+          setWalletData({ wallet: json.wallet || null, txns: Array.isArray(json.txns) ? json.txns : [] });
+        } else if (debug) {
+          console.log('dashboard data-balance response', { status: res.status, json });
+        }
+      } catch (err) {
+        if (active && debug) {
+          console.log('dashboard data-balance fetch error', err);
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [debug, setWalletData, state?.auth?.userId]);
   const hotspots = [
     {
       ...( // preserve key/title/kind if present
@@ -592,15 +696,6 @@ export function DashboardScreen({ onNavigate, debug = false }) {
       top: '20.54%',
       width: '86.73%',
       height: '9.31%',
-    },
-    {
-      key: 'cardJoin',
-      title: 'Join layout',
-      left: '5.00%',
-      top: '32.00%',
-      width: '86.00%',
-      height: '4.00%',
-      onClick: () => onNavigate('join'),
     },
     {
       ...( // preserve key/title/kind if present

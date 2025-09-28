@@ -12,7 +12,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
 
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN, DEBUG_ALLOW_OTP } = process.env;
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } = process.env;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !TELEGRAM_BOT_TOKEN) {
     return res.status(500).json({ ok: false, error: 'Missing server configuration' });
   }
@@ -48,8 +48,5 @@ export default async function handler(req, res) {
     sent = resp.ok;
   } catch {}
 
-  if (String(DEBUG_ALLOW_OTP) === '1') {
-    return res.status(200).json({ ok: true, sent, code, expires_at: expiresAt });
-  }
   return res.status(200).json({ ok: true, sent, expires_at: expiresAt });
 }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useReducer } from 'react';
+import {  createContext, useContext, useMemo, useReducer , useCallback } from 'react';
 import { GROUPS } from '../config/gameRules';
 
 const initialState = {
@@ -84,6 +84,22 @@ function reducer(state, action) {
       };
       return { ...state, results: [entry, ...state.results] };
     }
+    case 'SET_WALLET_DATA': {
+      const payload = action.payload || {};
+      const walletInput = payload.wallet ?? action.wallet ?? null;
+      const txnsInput = payload.txns ?? action.txns;
+      const nextWallet = walletInput
+        ? { ...walletInput, balance: Number(walletInput.balance ?? 0) }
+        : state.wallet;
+      const nextTxns = Array.isArray(txnsInput)
+        ? txnsInput.map((txn) => ({ ...txn }))
+        : state.walletTxns;
+      return {
+        ...state,
+        wallet: nextWallet,
+        walletTxns: nextTxns,
+      };
+    }
     default:
       return state;
   }
@@ -94,35 +110,47 @@ const AppStateContext = createContext(null);
 export function AppStateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  const navigate = useCallback((key, params) => dispatch({ type: 'NAVIGATE', key, params }), []);
+  const setAuth = useCallback((payload) => dispatch({ type: 'SET_AUTH', payload }), []);
+  const credit = useCallback((amount) => dispatch({ type: 'CREDIT', amount }), []);
+  const debit = useCallback((amount) => dispatch({ type: 'DEBIT', amount }), []);
+  const placeBet = useCallback(
+    ({ group, figure, points, drawAt }) => dispatch({ type: 'PLACE_BET', payload: { group, figure, points, drawAt } }),
+    [],
+  );
+  const setWalletData = useCallback(({ wallet, txns }) => dispatch({ type: 'SET_WALLET_DATA', payload: { wallet, txns } }), []);
+  const postResult = useCallback(async ({ group, figure, gifFile }) => {
+    const postedAt = new Date().toISOString();
+    const mediaName = gifFile?.name || null;
+    const mediaSize = gifFile?.size || 0;
+    const mediaType = gifFile?.type || null;
+    let mediaUrl = null;
+    if (gifFile && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      try {
+        mediaUrl = URL.createObjectURL(gifFile);
+      } catch (_) {
+        mediaUrl = null;
+      }
+    }
+    console.log('[postResult]', { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt });
+    dispatch({
+      type: 'POST_RESULT',
+      payload: { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt },
+    });
+    return { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt };
+  }, []);
+
   const api = useMemo(() => ({
     state,
-    navigate: (key, params) => dispatch({ type: 'NAVIGATE', key, params }),
-    setAuth: (payload) => dispatch({ type: 'SET_AUTH', payload }),
-    credit: (amount) => dispatch({ type: 'CREDIT', amount }),
-    debit: (amount) => dispatch({ type: 'DEBIT', amount }),
-    placeBet: ({ group, figure, points, drawAt }) => dispatch({ type: 'PLACE_BET', payload: { group, figure, points, drawAt } }),
-    postResult: async ({ group, figure, gifFile }) => {
-      const postedAt = new Date().toISOString();
-      const mediaName = gifFile?.name || null;
-      const mediaSize = gifFile?.size || 0;
-      const mediaType = gifFile?.type || null;
-      let mediaUrl = null;
-      if (gifFile && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-        try {
-          mediaUrl = URL.createObjectURL(gifFile);
-        } catch (_) {
-          mediaUrl = null;
-        }
-      }
-      console.log('[postResult]', { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt });
-      dispatch({
-        type: 'POST_RESULT',
-        payload: { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt },
-      });
-      return { group, figure, mediaName, mediaSize, mediaType, mediaUrl, postedAt };
-    },
+    navigate,
+    setAuth,
+    credit,
+    debit,
+    placeBet,
+    setWalletData,
+    postResult,
     groups: GROUPS,
-  }), [state]);
+  }), [state, navigate, setAuth, credit, debit, placeBet, setWalletData, postResult]);
 
   return (
     <AppStateContext.Provider value={api}>{children}</AppStateContext.Provider>
