@@ -1,5 +1,6 @@
 export const config = { runtime: 'nodejs' };
 
+import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import verifyInitData, { verifyTelegramInitData } from '../api-lib/telegramVerify.mjs';
 
@@ -54,13 +55,17 @@ function sanitizeProfilePayload(input = {}) {
   return out;
 }
 
-function maskProfileRow(row, { pin } = {}) {
+function hashPin(pin, userId) {
+  return crypto.createHash('sha256').update(`${pin}:${userId}`).digest('hex');
+}
+
+function maskProfileRow(row) {
   if (!row) return null;
   return {
     user_id: row.user_id,
     name: row.name || '',
     contact: row.contact || '',
-    has_pin: Boolean(pin && String(pin).length),
+    has_pin: Boolean(row.pin_hash),
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
   };
@@ -140,17 +145,20 @@ export default async function profile(req, res) {
         return send(res, 400, { ok: false, error: 'Missing profile fields', rid: requestId });
       }
 
+      const pinHash = pinValue ? hashPin(pinValue, userId) : null;
+
       const nextRow = {
         user_id: userId,
         name,
         contact,
         updated_at: new Date().toISOString(),
+        pin_hash: pinHash,
       };
 
       const { data: upserted, error: upsertErr } = await sb
         .from('profiles')
         .upsert(nextRow, { onConflict: 'user_id' })
-        .select('user_id,name,contact,created_at,updated_at')
+        .select('user_id,name,contact,pin_hash,created_at,updated_at')
         .maybeSingle();
       if (upsertErr) {
         console.error('profile_save_error', { rid: requestId, error: upsertErr.message });
@@ -162,7 +170,7 @@ export default async function profile(req, res) {
     if (!profileRow) {
       const { data: found, error: fetchErr } = await sb
         .from('profiles')
-        .select('user_id,name,contact,created_at,updated_at')
+        .select('user_id,name,contact,pin_hash,created_at,updated_at')
         .eq('user_id', userId)
         .maybeSingle();
       if (fetchErr) {
@@ -205,7 +213,7 @@ export default async function profile(req, res) {
       ok: true,
       rid: requestId,
       profile_exists: Boolean(profileRow),
-      profile: maskProfileRow(profileRow, { pin: pinValue }),
+      profile: maskProfileRow(profileRow),
       wallet: wallet ? { user_id: wallet.user_id, balance: Number(wallet.balance ?? 0) } : null,
     };
 
