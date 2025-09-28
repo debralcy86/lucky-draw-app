@@ -124,9 +124,10 @@ const txType = (delta >= 0) ? 'credit' : 'debit';
 if (txn.error) { console.error('admin.credit txn error', txn.error); return err(res, 'txn_insert_failed'); }
 
     const wNow = await supabase.from('wallets').select('user_id,balance').eq('user_id', userId).maybeSingle();
+const newBal = Number(wNow.data?.balance) || 0;
     if (wNow.error) return err(res, 'wallet_fetch_failed');
 
-    return ok(res, { user_id: userId, balance: Number(wNow.data?.balance) || 0, applied: delta });
+    return ok(res, { user_id: userId, balance: newBal, applied: delta });
   }
 
   return bad(res, 'unknown_action');
