@@ -107,10 +107,6 @@ export default async function profile(req, res) {
     const verifiedUser = check?.user || {};
     const userIdRaw = check?.userId || verifiedUser?.id || verifiedUser?.user?.id;
     const authDateRaw = payload?.auth_date || payload?.authDate;
-    const startParam = payload?.start_param || payload?.startapp || payload?.tgWebAppStartParam || '';
-    const userFirst = verifiedUser?.first_name || verifiedUser?.firstName || '';
-    const userLast = verifiedUser?.last_name || verifiedUser?.lastName || '';
-    const username = verifiedUser?.username || '';
 
     const userId = userIdRaw ? String(userIdRaw) : '';
     const authDate = Number(authDateRaw || 0);
@@ -176,58 +172,6 @@ export default async function profile(req, res) {
       profileRow = found || null;
     }
 
-    let profileMeta = null;
-    try {
-      const { data: metaRow, error: metaFetchErr } = await sb
-        .from('profiles_meta')
-        .select('pin,start_param,wallet_address')
-        .eq('user_id', userId)
-        .maybeSingle();
-      if (metaFetchErr) {
-        const msg = String(metaFetchErr.message || '');
-        if (msg.includes('Could not find the table')) {
-          console.warn('profile_meta_missing', { rid: requestId, table: 'profiles_meta' });
-        } else {
-          console.error('profile_meta_fetch_error', { rid: requestId, error: msg });
-        }
-      } else {
-        profileMeta = metaRow || null;
-        if (!pinValue && profileMeta?.pin) {
-          pinValue = profileMeta.pin;
-        }
-      }
-    } catch (metaCatch) {
-      console.error('profile_meta_fetch_exception', { rid: requestId, error: metaCatch?.message || metaCatch });
-    }
-
-    // Ensure a companion record for Telegram basics exists
-    try {
-      const envelope = {
-        user_id: userId,
-        auth_date: authDate,
-        tg_first_name: userFirst,
-        tg_last_name: userLast,
-        tg_username: username,
-        start_param: startParam || '',
-        wallet_address: profilePayload.walletAddress || profilePayload.wallet_address || profileMeta?.wallet_address || '',
-        pin: pinValue,
-        updated_at: new Date().toISOString(),
-      };
-      console.log('profile_upsert_envelope', { rid: requestId, envelope });
-      const { error: metaErr } = await sb
-        .from('profiles_meta')
-        .upsert(envelope, { onConflict: 'user_id' });
-      if (metaErr) {
-        const msg = String(metaErr.message || '');
-        if (msg.includes('Could not find the table')) {
-          console.warn('profile_meta_missing', { rid: requestId, table: 'profiles_meta' });
-        } else {
-          console.error('profile_meta_upsert_error', { rid: requestId, error: msg });
-        }
-      }
-    } catch (metaCatch) {
-      console.error('profile_meta_upsert_exception', { rid: requestId, error: metaCatch?.message || metaCatch });
-    }
 
     const { data: walletRow, error: walletErr } = await sb
       .from('wallets')
