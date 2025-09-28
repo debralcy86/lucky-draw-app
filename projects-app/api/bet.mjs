@@ -1,7 +1,8 @@
 export const config = { runtime: 'nodejs' };
 
 import { createClient } from '@supabase/supabase-js';
-import verifyInitData from '../api-lib/telegramVerify.mjs';
+import verifyInitData, { verifyTelegramInitData } from '../_lib/telegramVerify.mjs';
+import { Buffer } from 'node:buffer';
 
 function sanitizeCorsOrigin(val) {
   return String(val || '*').replace(/[\r\n]/g, '').split(',')[0].trim() || '*';
@@ -45,7 +46,7 @@ export default async function handler(req, res) {
     if (!initData) return send(res, 400, { ok: false, rid: R, error: 'Invalid Telegram initData', details: 'Missing initData' });
 
     // verify Telegram
-    const v = await verifyInitData(initData, TELEGRAM_BOT_TOKEN);
+    const v = verifyTelegramInitData(initData, TELEGRAM_BOT_TOKEN) || (await verifyInitData(initData, TELEGRAM_BOT_TOKEN));
     if (!v?.ok) return send(res, 400, { ok: false, rid: R, error: 'Invalid Telegram initData', details: v?.error || 'verify failed' });
     const userId = String(v.userId);
 
@@ -87,11 +88,13 @@ export default async function handler(req, res) {
     const { error: wtxe } = await sb.from('wallet_txns').insert({
       user_id: userId,
       type: 'debit',
-      amount: -amt,
+      amount: amt,
       balance_after: newBal,
       note: `bet stake ${drawId}`
     });
-    if (wtxe) return send(res, 500, { ok: false, rid: R, error: 'Txn write failed', details: String(wtxe?.message || wtxe) });
+    if (wtxe) {
+      return send(res, 500, { ok: false, rid: R, error: 'Txn write failed', details: String(wtxe?.message || wtxe) });
+    }
 
     const { data: bet, error: be } = await sb
       .from('bets')
