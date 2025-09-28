@@ -48,8 +48,9 @@ export default async function handler(req, res) {
     .eq('id', drawId)
     .eq('status', 'open')
     .maybeSingle();
-  if (drawErr) return err(res, 'draw_lookup_failed');
-  if (!draw) return bad(res, 'draw_closed');
+  if (drawErr) return res.status(500).json({ ok:false, reason:'draw_lookup_failed', drawId, message:String(drawErr.message||drawErr) });
+  if (!draw) return res.status(404).json({ ok:false, reason:'draw_not_found', drawId });
+  if (String(draw.status).toLowerCase() !== 'open') return res.status(400).json({ ok:false, reason:'draw_closed', drawId, status: draw.status });
 
   const { data: wallet, error: walletErr } = await supabase
     .from('wallets')
