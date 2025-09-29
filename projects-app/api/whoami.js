@@ -2,13 +2,20 @@
 export const config = { runtime: 'nodejs' };
 
 import { validate, parse } from '@telegram-apps/init-data-node';
+import crypto from 'node:crypto';
 
-export default async function handler(req, res) {
+async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ ok: false, reason: 'method_not_allowed' });
+  }
   try {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     if (!BOT_TOKEN) {
       return res.status(500).json({ ok: false, reason: 'missing_bot_token_runtime' });
     }
+
+    const token_fp8 = crypto.createHash('sha256').update(BOT_TOKEN).digest('hex').slice(0, 8);
+    try { res.setHeader('X-BotToken-FP', token_fp8); } catch {}
 
     const auth = req.headers.authorization || req.headers.Authorization || '';
     if (!auth.startsWith('tma ')) {
@@ -35,7 +42,8 @@ export default async function handler(req, res) {
       tag: 'whoami/v3.3-production-2025-09-28',
       userId,
       isAdmin,
-      user
+      user,
+      token_fp8
     });
   } catch (err) {
     console.error('[whoami error]', (err && err.stack) || err);
@@ -45,4 +53,9 @@ export default async function handler(req, res) {
       message: String((err && err.message) || err)
     });
   }
+}
+
+export default async function wrappedHandler(req, res) {
+  const { withCors } = await import('./_lib/cors.mjs');
+  return withCors(handler, { methods: ['POST', 'OPTIONS'] })(req, res);
 }
