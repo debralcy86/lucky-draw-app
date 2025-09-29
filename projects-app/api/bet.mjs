@@ -1,96 +1,111 @@
 export const config = { runtime: 'nodejs' };
 
-import { createClient } from '@supabase/supabase-js';
+import { Buffer } from 'node:buffer';
+import { createServiceClient, fetchWallet, adjustWalletBalance } from './_lib/wallet.js';
 import verifyInitData from './_lib/telegramVerify.mjs';
+import { withCors } from './_lib/cors.mjs';
 
-function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-}
 function rid() { return Math.random().toString(36).slice(2, 10); }
-function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
-function bad(res, reason) { return res.status(400).json({ ok: false, reason }); }
-function err(res, reason) { return res.status(500).json({ ok: false, reason }); }
+function respond(res, code, body) { res.status(code).setHeader('Content-Type','application/json; charset=utf-8'); res.end(JSON.stringify(body)); }
+function ok(res, data) { return respond(res, 200, { ok: true, ...data }); }
+function bad(res, reason, extra) { return respond(res, 400, { ok: false, reason, ...(extra||{}) }); }
+function err(res, reason, extra) { return respond(res, 500, { ok: false, reason, ...(extra||{}) }); }
 
 async function readJSON(req) {
-  try { return await req.json(); }
-  catch {
+  try { if (typeof req.json === 'function') return await req.json(); } catch {}
+  try {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks).toString('utf8');
     return raw ? JSON.parse(raw) : {};
-  }
+  } catch { return {}; }
 }
 
-export default async function handler(req, res) {
-  cors(res);
-  if (req.method === 'OPTIONS') return res.status(200).end();
+async function lookupOpenDraw(supabase, drawId) {
+  if (drawId) {
+    const { data: d, error: e } = await supabase
+      .from('draws')
+      .select('*')
+      .eq('id', drawId)
+      .eq('status', 'open')
+      .maybeSingle();
+    if (e) return { error: 'draw_lookup_failed', detail: String(e.message||e) };
+    if (!d) return { error: 'draw_not_found', detail: String(drawId) };
+    return { data: d };
+  }
+  const { data, error } = await supabase
+    .from('draws')
+    .select('*')
+    .eq('status', 'open')
+    .order('scheduled_at', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { error: 'draw_lookup_failed', detail: String(error.message||error) };
+  if (!data) return { error: 'no_open_draw' };
+  return { data };
+}
+
+async function handler(req, res) {
   if (req.method !== 'POST') return bad(res, 'method_not_allowed');
 
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  let supabase;
+  try { supabase = createServiceClient(); } catch { return err(res, 'server_misconfig'); }
 
   const auth = req.headers.authorization || '';
   if (!auth.startsWith('tma ')) return bad(res, 'missing_tma');
   const initData = auth.slice(4);
   const verify = verifyInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
-  if (!verify.ok) return bad(res, verify.error || 'invalid_tma');
+  if (!verify.ok) return bad(res, 'invalid_tma');
   const userId = verify.userId;
 
   const body = await readJSON(req);
-  const { drawId, figure, amount } = body || {};
-  if (!drawId || !figure || !amount) return bad(res, 'missing_fields');
-  if (amount <= 0) return bad(res, 'invalid_amount');
+  let { drawId, figure, amount } = body || {};
+  amount = Number(amount);
+  if (!figure || !(typeof figure === 'string')) return bad(res, 'missing_or_invalid_figure');
+  if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
 
-  const { data: draw, error: drawErr } = await supabase
-    .from('draws')
-    .select('*')
-    .eq('id', drawId)
-    .eq('status', 'open')
-    .maybeSingle();
-  if (drawErr) return res.status(500).json({ ok:false, reason:'draw_lookup_failed', drawId, message:String(drawErr.message||drawErr) });
-  if (!draw) return res.status(404).json({ ok:false, reason:'draw_not_found', drawId });
-  if (String(draw.status).toLowerCase() !== 'open') return res.status(400).json({ ok:false, reason:'draw_closed', drawId, status: draw.status });
+  const found = await lookupOpenDraw(supabase, drawId);
+  if (found.error) {
+    const code = (found.error === 'draw_not_found' || found.error === 'no_open_draw') ? 404 : 500;
+    return respond(res, code, { ok: false, reason: found.error, drawId, detail: found.detail });
+  }
+  const draw = found.data;
+  drawId = draw.id;
 
-  const { data: wallet, error: walletErr } = await supabase
-    .from('wallets')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (walletErr) return err(res, 'wallet_lookup_failed');
-  if (!wallet) return bad(res, 'wallet_missing');
-  if (wallet.balance < amount) return bad(res, 'insufficient_balance');
+  const w0 = await fetchWallet(supabase, userId);
+  if (w0.error) return err(res, 'wallet_lookup_failed');
+  const currentBalance = Number(w0.data?.balance ?? 0);
+  if (currentBalance < amount) return bad(res, 'insufficient_balance', { balance: currentBalance });
 
-  const newBalance = wallet.balance - amount;
+  const debit = await adjustWalletBalance(supabase, {
+    userId,
+    delta: -Math.abs(amount),
+    note: `bet:${drawId}:${figure}`,
+    type: 'bet',
+  });
+  if (debit.error) {
+    if (debit.code === 'insufficient_balance') return bad(res, 'insufficient_balance');
+    return err(res, debit.code || 'wallet_update_failed');
+  }
 
   const { data: bet, error: betErr } = await supabase
     .from('bets')
-    .insert({
-      user_id: userId,
-      draw_id: drawId,
-      figure,
-      amount
-    })
+    .insert({ user_id: userId, draw_id: drawId, figure, amount })
     .select()
     .maybeSingle();
-  if (betErr) return err(res, 'bet_insert_failed');
 
-  const { error: txnErr } = await supabase
-    .from('wallet_txns')
-    .insert({
-      user_id: userId,
-      type: 'debit',
-      amount,
-      balance_after: newBalance,
-      note: `bet:${drawId}:${figure}`
+  if (betErr) {
+    await adjustWalletBalance(supabase, {
+      userId,
+      delta: Math.abs(amount),
+      note: `bet_rollback:${drawId}:${figure}`,
+      type: 'bet_rollback'
     });
-  if (txnErr) return err(res, 'txn_insert_failed');
+    return err(res, 'bet_insert_failed');
+  }
 
-  const { error: updErr } = await supabase
-    .from('wallets')
-    .update({ balance: newBalance })
-    .eq('user_id', userId);
-  if (updErr) return err(res, 'wallet_update_failed');
-
-  return ok(res, { rid: rid(), bet, balance: newBalance });
+  return ok(res, { rid: rid(), bet, balance: debit.balance, draw });
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'] });
