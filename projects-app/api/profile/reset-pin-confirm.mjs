@@ -3,9 +3,10 @@ import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { createClient } from '@supabase/supabase-js';
 import verifyInitData, { verifyTelegramInitData } from '../_lib/telegramVerify.mjs';
+import { hashPin } from '../_lib/pin.js';
+import { withCors } from '../_lib/cors.mjs';
 
 function sha(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
-function hashPin(pin, userId) { return crypto.createHash('sha256').update(`${pin}:${userId}`).digest('hex'); }
 
 async function readJSON(rq) {
   if (rq && typeof rq.json === 'function') {
@@ -21,11 +22,7 @@ async function readJSON(rq) {
   }
 }
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
 
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } = process.env;
@@ -67,7 +64,7 @@ export default async function handler(req, res) {
   const expected = sha(`${code}:${userId}`);
   if (expected !== tokenRow.otp_hash) return res.status(400).json({ ok: false, error: 'code_mismatch' });
 
-  const pinHash = hashPin(newPin, userId);
+  const pinHash = hashPin(newPin);
 
   const { error: uErr } = await supabase
     .from('profiles')
@@ -80,3 +77,5 @@ export default async function handler(req, res) {
 
   return res.status(200).json({ ok: true, reset: true });
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'] });

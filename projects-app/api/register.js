@@ -1,8 +1,9 @@
 import { verifyTelegramAuth } from './_lib/telegramVerify.js';
-import { createClient } from '@supabase/supabase-js';
 import { hashPin } from './_lib/pin.js';
+import { getSupabaseAdmin } from './_lib/supabaseClient.mjs';
+import { withCors } from './_lib/cors.mjs';
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
   const auth = verifyTelegramAuth(req);
   if (!auth.ok) return res.status(401).json({ ok: false, reason: auth.error });
@@ -10,7 +11,12 @@ export default async function handler(req, res) {
   const { username, contact, pin } = req.body || {};
   if (!username || !contact || !pin) return res.status(400).json({ ok: false, reason: 'missing_fields' });
 
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  let supabase;
+  try {
+    supabase = getSupabaseAdmin();
+  } catch (e) {
+    return res.status(500).json({ ok: false, reason: 'server_misconfig' });
+  }
   const user_id = auth.userId;
 
   const { data: existing, error: selErr } = await supabase
@@ -39,3 +45,5 @@ export default async function handler(req, res) {
 
   return res.status(409).json({ ok: false, reason: 'already_registered' });
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'] });

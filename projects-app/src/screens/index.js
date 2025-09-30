@@ -114,7 +114,7 @@ function useHotspotDebug(label, enabled, hotspots) {
 }
 
 // --- Telegram initData + API helper (inline, step 1) ---
-function getInitData() {
+export function getInitData() {
   try {
     const hasWin = typeof window !== 'undefined';
     const loc = hasWin && window.location ? window.location : null;
@@ -701,10 +701,10 @@ export function DashboardScreen({ onNavigate, debug = false }) {
       ...( // preserve key/title/kind if present
         { key: 'tileJoin', title: 'Join Lucky Draw', onClick: () => onNavigate('join') }
       ),
-      left: '4.55%',
-      top: '37.67%',
-      width: '86.31%',
-      height: '3.67%',
+      left: '4.00%',
+      top: '32.00%',
+      width: '86.00%',
+      height: '4.00%',
     },
     {
       ...( // preserve key/title/kind if present
@@ -835,27 +835,46 @@ export function JoinScreen({ onNavigate, debug = false }) {
 }
 
 function BoardScreenBase({ group, onNavigate, debug = false }) {
-  const { placeBet } = useAppState();
+  const { state, placeBet } = useAppState();
+  const balance = state?.wallet?.balance ?? 0;
   const [edit, setEdit] = useState(false);
   const [points] = useState(10);
-  const [bets, setBets] = useState({});
+  const [betsByGroup, setBetsByGroup] = useState(() => BOARD_GROUPS.reduce((acc, grp) => {
+    acc[grp] = {};
+    return acc;
+  }, {}));
 
-  const toggleFigure = useCallback((figure) => {
-    setBets((prev) => ({ ...prev, [figure]: prev[figure] ?? points }));
-  }, [points]);
-
-  const setFigurePoints = useCallback((figure, value) => {
-    setBets((prev) => {
-      const next = { ...prev, [figure]: value };
-      if (value <= 0) {
-        delete next[figure];
-      }
-      return next;
-    });
+  useEffect(() => {
+    console.log('TAG: board-place-guard-01');
   }, []);
 
+  const groupBets = betsByGroup[group] || {};
+
+  const toggleFigure = useCallback((figure) => {
+    setBetsByGroup((prev) => {
+      const currentGroup = { ...(prev[group] || {}) };
+      if (currentGroup[figure] == null) {
+        currentGroup[figure] = points;
+      }
+      return { ...prev, [group]: currentGroup };
+    });
+  }, [group, points]);
+
+  const setFigurePoints = useCallback((figure, value) => {
+    setBetsByGroup((prev) => {
+      const currentGroup = { ...(prev[group] || {}) };
+      if (value <= 0) {
+        delete currentGroup[figure];
+      } else {
+        currentGroup[figure] = value;
+      }
+      return { ...prev, [group]: currentGroup };
+    });
+  }, [group]);
+
   const handlePlacePoints = useCallback(() => {
-    const entries = Object.entries(bets)
+    const selected = betsByGroup[group] || {};
+    const entries = Object.entries(selected)
       .map(([key, value]) => [Number(key), Math.max(0, Math.floor(Number(value) || 0))])
       .filter(([, value]) => value > 0);
 
@@ -863,13 +882,20 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
       return;
     }
 
+    const total = entries.reduce((sum, [, value]) => sum + value, 0);
+    if (total > balance) {
+      alert(`Total points (${total}) exceed your balance (${balance}). Reduce points or deposit more.`);
+      return;
+    }
+
     const timestamp = new Date().toISOString();
     for (const [figure, value] of entries) {
       placeBet({ group, figure, points: value, drawAt: timestamp });
     }
+    setBetsByGroup((prev) => ({ ...prev, [group]: {} }));
     alert('Bets placed!');
     onNavigate('dashboard');
-  }, [bets, group, onNavigate, placeBet]);
+  }, [balance, betsByGroup, group, onNavigate, placeBet]);
 
   const baseFigureHotspots = useMemo(
     () => FIGURE_GRID_COORDS.map(({ figure, left, top, width, height }) => ({
@@ -886,7 +912,7 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
 
   const figureHotspots = baseFigureHotspots.map((spot) => {
     const { figure, left, top, width, height, title } = spot;
-    const current = bets[figure];
+    const current = groupBets[figure];
     return current != null
       ? {
           key: `input_${group}_${figure}`,
@@ -917,8 +943,8 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
   useHotspotDebug(`board${group}`, debug, hotspots);
 
   const totalPoints = useMemo(
-    () => Object.values(bets).reduce((sum, value) => sum + (Number(value) || 0), 0),
-    [bets],
+    () => Object.values(groupBets).reduce((sum, value) => sum + (Number(value) || 0), 0),
+    [groupBets],
   );
 
   const currentIndex = BOARD_GROUPS.indexOf(group);
@@ -940,7 +966,7 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div><strong>Total Points:</strong> {totalPoints}</div>
-        <button disabled={Object.keys(bets).length === 0} onClick={handlePlacePoints}>Place Points</button>
+        <button disabled={Object.keys(groupBets).length === 0} onClick={handlePlacePoints}>Place Points</button>
         <button onClick={() => setEdit((value) => !value)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
         {prevGroup && (
           <button onClick={() => onNavigate('board', { group: prevGroup })}>{`← Prev: Group ${prevGroup}`}</button>
@@ -951,6 +977,7 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
           <button onClick={() => onNavigate('dashboard')}>Done</button>
         )}
         <button onClick={() => onNavigate('join')}>Back</button>
+        <span style={{ marginLeft: 8, fontSize: 12, opacity: 0.7 }}>v: board-place-guard-01</span>
       </div>
     </div>
   );
@@ -1025,17 +1052,47 @@ export function DepositScreen({ onNavigate, debug = false }) {
   const normalizedAmount = Math.max(0, Math.floor(Number(amount) || 0));
   const canSubmit = normalizedAmount > 0;
 
-  const handleDeposit = () => {
+  const handleDeposit = async () => {
     if (!canSubmit) {
       alert('Enter a deposit amount greater than zero.');
       return;
     }
-    credit(normalizedAmount);
-    console.log('Deposit submitted (placeholder)', { amount: normalizedAmount, note, uploadSlip });
-    alert(`Deposit recorded for ${normalizedAmount} pts (placeholder).`);
-    setNote('');
-    setUploadSlip('');
-    onNavigate('dashboard');
+    const initData = getInitData();
+    if (!initData) {
+      alert('Open inside Telegram to continue (initData missing).');
+      return;
+    }
+    try {
+      const res = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initData,
+        },
+        body: JSON.stringify({
+          action: 'deposit',
+          amount: normalizedAmount,
+          method: 'bank',
+          ref: note || 'TMA',
+          slip_url: uploadSlip || undefined,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = json?.error || json?.reason || `Deposit failed (${res.status})`;
+        alert(msg);
+        return;
+      }
+      // Optimistic local state update as fallback (credit is from appState)
+      try { credit(normalizedAmount); } catch {}
+      alert(`Deposit recorded for ${normalizedAmount} pts.`);
+      setNote('');
+      setUploadSlip('');
+      onNavigate('dashboard');
+    } catch (e) {
+      console.log('Deposit error:', e);
+      alert('Network error while creating deposit. Please try again.');
+    }
   };
 
   const hotspots = [
@@ -1176,7 +1233,7 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
 
   const normalizedAmount = Math.max(0, Math.floor(Number(amount) || 0));
 
-  const handleRequest = () => {
+  const handleRequest = async () => {
     if (normalizedAmount <= 0) {
       alert('Enter a withdraw amount greater than zero.');
       return;
@@ -1189,18 +1246,40 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       alert('Select a withdrawal destination from your profile setup.');
       return;
     }
-    debit(normalizedAmount);
-    console.log('Withdraw request submitted (placeholder)', {
-      amount: normalizedAmount,
-      destination: {
-        bank: activeDestination.bank,
-        accountNumber: activeDestination.accountNumber,
-        accountHolder: activeDestination.accountHolder,
-      },
-    });
-    alert(`Withdraw request submitted for ${normalizedAmount} pts (placeholder).`);
-    setAmount(0);
-    onNavigate('dashboard');
+    const initData = getInitData();
+    if (!initData) {
+      alert('Open inside Telegram to continue (initData missing).');
+      return;
+    }
+    try {
+      const res = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initData,
+        },
+        body: JSON.stringify({
+          action: 'withdraw',
+          amount: normalizedAmount,
+          destination: `${activeDestination.bank || 'bank'}:${activeDestination.accountNumber || ''}`.trim(),
+          accountHolder: activeDestination.accountHolder || '',
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = json?.error || json?.reason || `Withdraw request failed (${res.status})`;
+        alert(msg);
+        return;
+      }
+      // Optimistic local state update as fallback (debit is from appState)
+      try { debit(normalizedAmount); } catch {}
+      alert(`Withdraw request submitted for ${normalizedAmount} pts.`);
+      setAmount(0);
+      onNavigate('dashboard');
+    } catch (e) {
+      console.log('Withdraw error:', e);
+      alert('Network error while creating withdraw request. Please try again.');
+    }
   };
 
   const destinationOptions = destinationRecords.map((entry) => ({ value: entry.id, label: entry.label }));
@@ -1311,12 +1390,15 @@ export function HistoryScreen({ onNavigate, debug = false }) {
       if (t.type === 'bet') label = 'Bet';
       else if (t.type === 'credit') label = typeLower.includes('win') ? 'Win' : 'Deposit';
       else if (t.type === 'debit') label = 'Withdraw';
+      const rawAmount = Number(t.amount) || 0;
+      const isNegative = t.type === 'debit' || t.type === 'bet';
+      const signedAmount = isNegative ? -Math.abs(rawAmount) : Math.abs(rawAmount);
       return {
         id: `txn-${t.id}`,
         timestamp: t.createdAt,
         transaction: label,
         figure: '-',
-        points: (t.type === 'debit' ? -1 : 1) * t.amount,
+        points: signedAmount,
       };
     });
 
@@ -1572,11 +1654,56 @@ const admin09Hotspots = [
   { left: '3.57%', top: '45.97%', width: '91.33%', height: '5.08%' }, // 5
 ];
 
+function formatAdminAccessReason(reason) {
+  if (!reason) return '';
+  const value = String(reason);
+  const normalized = value.toLowerCase();
+  if (normalized === 'missing_init_data') {
+    return 'Launch this mini app from Telegram to verify admin access.';
+  }
+  if (normalized === 'not_admin') {
+    return 'Your Telegram account is not authorized for admin access.';
+  }
+  if (normalized === 'network_error') {
+    return 'Network error while verifying admin access. Try again.';
+  }
+  if (normalized.startsWith('status_')) {
+    const code = value.slice(7) || '?';
+    return `Server responded with status ${code} while verifying admin access.`;
+  }
+  if (normalized === 'verify_failed') {
+    return 'Admin verification failed. Refresh the mini app and try again.';
+  }
+  if (normalized === 'missing_tma_header') {
+    return 'Authorization header missing. Relaunch the mini app from Telegram.';
+  }
+  return value;
+}
+
+function AdminAccessRequired({ onNavigate, reason }) {
+  const message = formatAdminAccessReason(reason);
+  return (
+    <div style={{ padding: 24 }}>
+      <h2 style={{ marginTop: 0 }}>Admin access required</h2>
+      <p style={{ margin: '12px 0' }}>{message || 'Admin access is restricted to authorized accounts.'}</p>
+      <button onClick={() => onNavigate('dashboard')}>Back to Dashboard</button>
+    </div>
+  );
+}
+
 // Admin Screens (09–13)
 export function AdminDashboardScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
-  // computed totals for display bar
   const { state } = useAppState();
+  const isAdmin = !!state?.auth?.isAdmin;
+
+  // Always call hook in a non-conditional position with a stable array
+  useHotspotDebug('admin-dashboard', debug, []);
+
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
+
   const totalUsers = Array.isArray(state?.users) ? state.users.length : 0;
   const totalPoints = Array.isArray(state?.wallets)
     ? state.wallets.reduce((sum, w) => sum + (Number(w?.balance) || 0), 0)
@@ -1584,25 +1711,24 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
 
   const hotspots = [
     // Totals display bar (non-nav; shows computed values)
-    { 
+    {
       key: 'totals',
       title: `Total Users: ${totalUsers}, Total Points: ${totalPoints.toLocaleString()}`,
       left: '4.37%',
       top: '8.53%',
       width: '91.00%',
       height: '9.34%',
-      onClick: () => alert(`Users: ${totalUsers}, Points: ${totalPoints.toLocaleString()}`)
+      onClick: () => alert(`Users: ${totalUsers}, Points: ${totalPoints.toLocaleString()}`),
     },
 
     // Vertical list (exact coordinates provided)
-    { key: 'users',   title: 'Users',            left: '4.00%', top: '20.39%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminUsers') },
-    { key: 'points',  title: 'Points',           left: '4.00%', top: '27.00%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminPoints') },
-    { key: 'figures', title: 'Figures',          left: '4.00%', top: '33.66%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminFigures') },
-    { key: 'results', title: 'Results Posting',  left: '4.00%', top: '40.31%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
-    { key: 'reports', title: 'Reports',          left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
+    { key: 'users', title: 'Users', left: '4.00%', top: '20.39%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminUsers') },
+    { key: 'points', title: 'Points', left: '4.00%', top: '27.00%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminPoints') },
+    { key: 'figures', title: 'Figures', left: '4.00%', top: '33.66%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminFigures') },
+    { key: 'results', title: 'Results Posting', left: '4.00%', top: '40.31%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
+    { key: 'reports', title: 'Reports', left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
   ];
   const showOverlay = edit;
-  useHotspotDebug('admin-dashboard', debug, hotspots);
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -1630,6 +1756,28 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
 
 export function AdminUserManagementScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
+  const { state } = useAppState();
+  const isAdmin = !!state?.auth?.isAdmin;
+  // Always call hook at top
+  useHotspotDebug(
+    'admin-users',
+    debug,
+    isAdmin
+      ? [
+          {
+            key: 'placeholder',
+            title: 'placeholder',
+            left: '0%',
+            top: '0%',
+            width: '0%',
+            height: '0%',
+          },
+        ]
+      : []
+  );
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
 
   // Search field state (Name/ID/Contact)
   const [q, setQ] = useState('');
@@ -1651,7 +1799,10 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
       key: 'searchUser',
       kind: 'input',
       title: 'Search User',
-      left: '4.00%', top: '12.00%', width: '90.60%', height: '6.08%',
+      left: '4.00%',
+      top: '12.00%',
+      width: '90.60%',
+      height: '6.08%',
       value: q,
       onChange: (v) => setQ(v),
     },
@@ -1682,6 +1833,27 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
 
 export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   const { state } = useAppState();
+  const isAdmin = !!state?.auth?.isAdmin;
+  // Always call hook at top
+  useHotspotDebug(
+    'admin-points',
+    debug,
+    isAdmin
+      ? [
+          {
+            key: 'placeholder',
+            title: 'placeholder',
+            left: '0%',
+            top: '0%',
+            width: '0%',
+            height: '0%',
+          },
+        ]
+      : []
+  );
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   const walletTxns = useMemo(() => state?.walletTxns || [], [state?.walletTxns]);
   const authUserId = state?.auth?.userId || '-';
   const [edit, setEdit] = useState(false);
@@ -1696,20 +1868,27 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   }, [walletTxns, filterValue]);
 
   const maxDisplayRows = 10;
-  const rows = useMemo(() => filteredTxns.slice(0, maxDisplayRows).map((t) => {
-    const typeLower = (t.note || '').toLowerCase();
-    let txnLabel = 'Transaction';
-    if (t.type === 'bet') txnLabel = 'Bet';
-    else if (t.type === 'credit') txnLabel = typeLower.includes('win') ? 'Win' : 'Deposit';
-    else if (t.type === 'debit') txnLabel = 'Withdraw';
-    return {
-      id: t.id,
-      userId: t.userId || authUserId,
-      amount: t.amount,
-      txnLabel,
-      timestamp: t.createdAt,
-    };
-  }), [filteredTxns, authUserId]);
+  const rows = useMemo(
+    () =>
+      filteredTxns.slice(0, maxDisplayRows).map((t) => {
+        const typeLower = (t.note || '').toLowerCase();
+        let txnLabel = 'Transaction';
+        if (t.type === 'bet') txnLabel = 'Bet';
+        else if (t.type === 'credit') txnLabel = typeLower.includes('win') ? 'Win' : 'Deposit';
+        else if (t.type === 'debit') txnLabel = 'Withdraw';
+        const rawAmount = Number(t.amount) || 0;
+        const isNegative = t.type === 'debit' || t.type === 'bet';
+        const signedAmount = isNegative ? -Math.abs(rawAmount) : Math.abs(rawAmount);
+        return {
+          id: t.id,
+          userId: t.userId || authUserId,
+          amount: signedAmount,
+          txnLabel,
+          timestamp: t.createdAt,
+        };
+      }),
+    [filteredTxns, authUserId]
+  );
 
   const handleRowClick = useCallback((row) => {
     alert(
@@ -1799,7 +1978,8 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
                     <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{row.userId}</td>
                     <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{row.txnLabel}</td>
                     <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px', textAlign: 'right', color: row.amount >= 0 ? '#1a7f37' : '#b42318' }}>
-                      {row.amount >= 0 ? '+' : ''}{row.amount.toLocaleString()}
+                      {row.amount >= 0 ? '+' : ''}
+                      {row.amount.toLocaleString()}
                     </td>
                     <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{new Date(row.timestamp).toLocaleString()}</td>
                   </tr>
@@ -1820,6 +2000,28 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
 
 export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
+  const { state } = useAppState();
+  const isAdmin = !!state?.auth?.isAdmin;
+  // Always call hook at top
+  useHotspotDebug(
+    'admin-figures',
+    debug,
+    isAdmin
+      ? [
+          {
+            key: 'placeholder',
+            title: 'placeholder',
+            left: '0%',
+            top: '0%',
+            width: '0%',
+            height: '0%',
+          },
+        ]
+      : []
+  );
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   const hotspots = [
     {
       key: 'filters',
@@ -1923,7 +2125,28 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
 }
 
 export function AdminResultPostingScreen({ onNavigate, debug = false }) {
-  const { postResult } = useAppState();
+  const { postResult, state } = useAppState();
+  const isAdmin = !!state?.auth?.isAdmin;
+  // Always call hook at top
+  useHotspotDebug(
+    'admin-results',
+    debug,
+    isAdmin
+      ? [
+          {
+            key: 'placeholder',
+            title: 'placeholder',
+            left: '0%',
+            top: '0%',
+            width: '0%',
+            height: '0%',
+          },
+        ]
+      : []
+  );
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   const [edit, setEdit] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState('A');
   const [selectedFigure, setSelectedFigure] = useState('1');
@@ -1933,10 +2156,14 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
   const fileInputRef = useRef(null);
 
   const groupOptions = useMemo(() => ['A', 'B', 'C', 'D'].map((value) => ({ value, label: `Group ${value}` })), []);
-  const figureOptions = useMemo(() => Array.from({ length: 36 }, (_, idx) => {
-    const value = String(idx + 1);
-    return { value, label: `Figure ${idx + 1}` };
-  }), []);
+  const figureOptions = useMemo(
+    () =>
+      Array.from({ length: 36 }, (_, idx) => {
+        const value = String(idx + 1);
+        return { value, label: `Figure ${idx + 1}` };
+      }),
+    []
+  );
 
   const handleFileClick = useCallback(() => {
     if (edit) return;
@@ -1960,37 +2187,40 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
     setStatusMessage('');
   }, []);
 
-  const handlePost = useCallback(async () => {
-    if (isPosting) return;
-    if (!selectedGroup || !selectedFigure) {
-      setStatusMessage('Select both a group and figure.');
-      return;
-    }
-    if (!gifFile) {
-      setStatusMessage('Upload the winning GIF before posting.');
-      return;
-    }
-
-    setIsPosting(true);
-    setStatusMessage('');
-    try {
-      await postResult({ group: selectedGroup, figure: Number(selectedFigure), gifFile });
-      alert(`Results for Group ${selectedGroup}, Figure ${selectedFigure} posted.`);
-      setGifFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+  const handlePost = useCallback(
+    async () => {
+      if (isPosting) return;
+      if (!selectedGroup || !selectedFigure) {
+        setStatusMessage('Select both a group and figure.');
+        return;
       }
-      onNavigate('adminDashboard');
-    } catch (error) {
-      console.error('Failed to post result', error);
-      setStatusMessage('Failed to post results. Please try again.');
-    } finally {
-      setIsPosting(false);
-    }
-  }, [gifFile, isPosting, onNavigate, postResult, selectedFigure, selectedGroup]);
+      if (!gifFile) {
+        setStatusMessage('Upload the winning GIF before posting.');
+        return;
+      }
+
+      setIsPosting(true);
+      setStatusMessage('');
+      try {
+        await postResult({ group: selectedGroup, figure: Number(selectedFigure), gifFile });
+        alert(`Results for Group ${selectedGroup}, Figure ${selectedFigure} posted.`);
+        setGifFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        onNavigate('adminDashboard');
+      } catch (error) {
+        console.error('Failed to post result', error);
+        setStatusMessage('Failed to post results. Please try again.');
+      } finally {
+        setIsPosting(false);
+      }
+    },
+    [gifFile, isPosting, onNavigate, postResult, selectedFigure, selectedGroup]
+  );
 
   const hotspots = [
-    { key: 'backDash', title: 'Back to Admin',  left: '4.29%', top: '1.90%', width: '13.78%', height: '0.82%',  onClick: () => onNavigate('adminDashboard') },
+    { key: 'backDash', title: 'Back to Admin', left: '4.29%', top: '1.90%', width: '13.78%', height: '0.82%', onClick: () => onNavigate('adminDashboard') },
     {
       key: 'groupSelect',
       title: 'Select group',

@@ -14,8 +14,15 @@ function reducer(state, action) {
   switch (action.type) {
     case 'NAVIGATE':
       return { ...state, screen: { key: action.key, params: action.params || {} } };
-    case 'SET_AUTH':
-      return { ...state, auth: action.payload };
+    case 'SET_AUTH': {
+      const payload = action.payload;
+      if (payload == null) {
+        return { ...state, auth: null };
+      }
+      const replace = action.options?.replace;
+      const current = replace ? {} : (state.auth || {});
+      return { ...state, auth: { ...current, ...payload } };
+    }
     case 'CREDIT': {
       const balance = state.wallet.balance + action.amount;
       const txn = {
@@ -111,7 +118,7 @@ export function AppStateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
   const navigate = useCallback((key, params) => dispatch({ type: 'NAVIGATE', key, params }), []);
-  const setAuth = useCallback((payload) => dispatch({ type: 'SET_AUTH', payload }), []);
+  const setAuth = useCallback((payload, options) => dispatch({ type: 'SET_AUTH', payload, options }), []);
   const credit = useCallback((amount) => dispatch({ type: 'CREDIT', amount }), []);
   const debit = useCallback((amount) => dispatch({ type: 'DEBIT', amount }), []);
   const placeBet = useCallback(

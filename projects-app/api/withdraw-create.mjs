@@ -1,7 +1,8 @@
 export const config = { runtime: 'nodejs' };
 
-import { createClient } from '@supabase/supabase-js';
-import { verifyTelegramInitData } from '../api-lib/telegramVerify.mjs';
+import { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
+import { withCors } from './_lib/cors.mjs';
+import { createServiceClient, ensureWallet } from './_lib/wallet.js';
 
 function send(res, status, payload) {
   res.statusCode = status;
@@ -29,11 +30,10 @@ async function readBody(req) {
   }
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const rid = Math.random().toString(36).slice(2, 10);
   try {
     if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST,OPTIONS');
       return send(res, 405, { ok: false, error: 'Method not allowed' });
     }
 
@@ -77,31 +77,16 @@ export default async function handler(req, res) {
       return send(res, 400, { ok: false, rid, error: 'Amount too large' });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !supabaseKey) {
-      return send(res, 500, { ok: false, rid, error: 'Missing Supabase envs' });
+    let supabase;
+    try {
+      supabase = createServiceClient();
+    } catch (e) {
+      return send(res, 500, { ok: false, rid, error: 'Missing Supabase envs', details: e.message });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
-
-    const { data: walletRow, error: walletErr } = await supabase
-      .from('wallets')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (walletErr) {
-      return send(res, 500, { ok: false, rid, error: 'Wallet read failed', details: walletErr.message });
-    }
-
-    if (!walletRow) {
-      const { error: upsertErr } = await supabase
-        .from('wallets')
-        .upsert({ user_id: userId, balance: 0 });
-      if (upsertErr) {
-        return send(res, 500, { ok: false, rid, error: 'Wallet provision failed', details: upsertErr.message });
-      }
+    const ensured = await ensureWallet(supabase, userId);
+    if (ensured.error) {
+      return send(res, 500, { ok: false, rid, error: 'Wallet provision failed', details: ensured.error.message });
     }
 
     const note = (body?.note || '').toString().trim() || null;
@@ -129,3 +114,5 @@ export default async function handler(req, res) {
     return send(res, 500, { ok: false, rid, error: 'SERVER_ERROR', details: err?.message || String(err) });
   }
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'] });

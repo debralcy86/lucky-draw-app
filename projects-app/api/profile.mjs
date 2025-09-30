@@ -1,8 +1,8 @@
 export const config = { runtime: 'nodejs' };
 
-import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
-import verifyInitData, { verifyTelegramInitData } from '../api-lib/telegramVerify.mjs';
+import verifyInitData, { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
+import { hashPin } from './_lib/pin.js';
 
 const ALLOW_HEADERS = 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID';
 
@@ -53,10 +53,6 @@ function sanitizeProfilePayload(input = {}) {
   if (typeof input.userId === 'string') out.userId = input.userId.trim();
   if (typeof input.user_id === 'string') out.userId = input.user_id.trim();
   return out;
-}
-
-function hashPin(pin, userId) {
-  return crypto.createHash('sha256').update(`${pin}:${userId}`).digest('hex');
 }
 
 function maskProfileRow(row) {
@@ -145,7 +141,7 @@ export default async function profile(req, res) {
         return send(res, 400, { ok: false, error: 'Missing profile fields', rid: requestId });
       }
 
-      const pinHash = pinValue ? hashPin(pinValue, userId) : null;
+      const pinHash = pinValue ? hashPin(pinValue) : null;
 
       const nextRow = {
         user_id: userId,

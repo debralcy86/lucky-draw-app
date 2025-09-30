@@ -2,14 +2,11 @@ export const config = { runtime: 'nodejs' };
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import verifyInitData, { verifyTelegramInitData } from '../_lib/telegramVerify.mjs';
+import { withCors } from '../_lib/cors.mjs';
 
 function sha(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
 
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } = process.env;
@@ -50,3 +47,5 @@ export default async function handler(req, res) {
 
   return res.status(200).json({ ok: true, sent, expires_at: expiresAt });
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'] });

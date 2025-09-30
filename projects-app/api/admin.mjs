@@ -4,13 +4,7 @@ export const config = { runtime: 'nodejs' };
 
 import { createClient } from '@supabase/supabase-js';
 import verifyInitData, { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
-
-function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Expose-Headers','Content-Type');
-}
+import { withCors } from './_lib/cors.mjs';
 function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
 function bad(res, error) { return res.status(400).json({ ok: false, reason: error }); }
 function err(res, error) { return res.status(500).json({ ok: false, reason: error }); }
@@ -53,9 +47,7 @@ async function readJSON(req) {
   }
 }
 
-export default async function handler(req, res) {
-  cors(res);
-  if (req.method === 'OPTIONS') return res.status(200).end();
+async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, reason: 'Method Not Allowed' });
 
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN, ADMIN_TOKEN, ADMIN_USER_IDS } = process.env;
@@ -94,11 +86,12 @@ export default async function handler(req, res) {
 
   if (action === 'credit') {
     const userId = String(body.userId || '').trim();
-const txType = (delta >= 0) ? 'credit' : 'debit';
     const delta = Number(body.delta);
     const note = (body.note == null ? '' : String(body.note)).slice(0, 200);
     if (!userId) return bad(res, 'missing_user');
     if (!Number.isFinite(delta) || delta === 0) return bad(res, 'invalid_delta');
+
+    const txType = delta >= 0 ? 'credit' : 'debit';
 
     const wUp = await supabase
       .from('wallets')
@@ -120,15 +113,22 @@ const txType = (delta >= 0) ? 'credit' : 'debit';
       if (wSet.error) return err(res, 'wallet_update_failed');
     }
 
-    const txn = await supabase.from('wallet_txns').insert([{ user_id: userId, delta, note: (note && note.length) ? note : null }]).select('id').maybeSingle();
-if (txn.error) { console.error('admin.credit txn error', txn.error); return err(res, 'txn_insert_failed'); }
-
     const wNow = await supabase.from('wallets').select('user_id,balance').eq('user_id', userId).maybeSingle();
-const newBal = Number(wNow.data?.balance) || 0;
     if (wNow.error) return err(res, 'wallet_fetch_failed');
 
-    return ok(res, { user_id: userId, balance: newBal, applied: delta });
+    const txn = await supabase.from('wallet_txns').insert([{
+      user_id: userId,
+      type: txType,
+      amount: delta,
+      balance_after: Number(wNow.data?.balance) || 0,
+      note: note || null
+    }]).select('id').maybeSingle();
+    if (txn.error) { console.error('admin.credit txn error', txn.error); return err(res, 'txn_insert_failed'); }
+
+    return ok(res, { user_id: userId, balance: Number(wNow.data?.balance) || 0, applied: delta });
   }
 
   return bad(res, 'unknown_action');
 }
+
+export default withCors(handler, { methods: ['POST', 'OPTIONS'], exposeHeaders: ['Content-Type'] });
