@@ -1,260 +1,143 @@
+// wallet/v2 – REST-only
 export const config = { runtime: 'nodejs' };
 
-import { Buffer } from 'node:buffer';
-import verifyInitData from './_lib/telegramVerify.mjs';
-import { withCors } from './_lib/cors.mjs';
-import {
-  createServiceClient,
-  ensureWallet,
-  fetchWallet,
-  adjustWalletBalance,
-  insertTransaction,
-} from './_lib/wallet.js';
+import { verifyInitData } from './_lib/telegramVerify.mjs';
 
-function rid() {
-  return Math.random().toString(36).slice(2, 10);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+async function sfetch(path, init={}) {
+  const url = `${SUPABASE_URL}/rest/v1${path}`;
+  const headers = {
+    apikey: SERVICE_ROLE,
+    Authorization: `Bearer ${SERVICE_ROLE}`,
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+    ...(init.headers || {}),
+  };
+  const res = await fetch(url, { ...init, headers });
+  return res;
 }
 
-function respond(res, status, payload) {
-  res.status(status).setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(JSON.stringify(payload));
+function ok(res, body, origin) {
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(body);
 }
 
-function ok(res, data) {
-  return respond(res, 200, { ok: true, ...data });
+function err(res, code, reason, origin) {
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(code).json({ ok: false, reason });
 }
 
-function bad(res, reason, extra) {
-  return respond(res, 400, { ok: false, reason, ...(extra || {}) });
-}
-
-function err(res, reason, extra) {
-  return respond(res, 500, { ok: false, reason, ...(extra || {}) });
-}
-
-async function readJSON(req) {
-  if (typeof req.json === 'function') {
-    try {
-      return await req.json();
-    } catch (_) {
-      // fall through to manual reader
-    }
-  }
-  try {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const raw = Buffer.concat(chunks).toString('utf8');
-    return raw ? JSON.parse(raw) : {};
-  } catch (_) {
-    return null;
-  }
-}
-
-function maskDestination(destination) {
-  if (!destination) return '';
-  const value = String(destination);
-  if (value.length <= 8) return value;
-  return `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
-async function createDepositRequest(client, userId, { amount, method, ref, note }) {
-  const ensured = await ensureWallet(client, userId);
-  if (ensured.error) {
-    return { error: ensured.error, code: 'wallet_upsert_failed' };
-  }
-  const balanceBefore = Number(ensured.data?.balance ?? 0);
-
-  const insert = await client
-    .from('deposit_requests')
-    .insert({ user_id: userId, amount, method, ref, note, status: 'pending' })
-    .select('id')
-    .maybeSingle();
-  if (insert.error) {
-    return { error: insert.error, code: 'deposit_request_insert_failed' };
-  }
-
-  const requestId = insert.data?.id;
-  const noteSuffix = `${method ? ` via ${method}` : ''}${ref ? ` ref:${ref}` : ''}`.trim();
-  const txnNote = `deposit request #${requestId}${noteSuffix ? noteSuffix : ''}`;
-  const { error: txnErr } = await insertTransaction(client, {
-    user_id: userId,
-    type: 'deposit_pending',
-    amount: amount || 0,
-    balance_after: balanceBefore,
-    note: txnNote,
+async function ensureWallet(userId) {
+  const get = await sfetch(`/wallets?user_id=eq.${userId}&select=user_id,balance&limit=1`);
+  if (!get.ok) throw new Error('wallet_select_failed');
+  const rows = await get.json();
+  if (rows.length) return rows[0];
+  const ins = await sfetch(`/wallets`, {
+    method: 'POST',
+    body: JSON.stringify([{ user_id: userId, balance: 0 }]),
   });
-
-  if (txnErr) {
-    return { error: txnErr, code: 'txn_insert_failed', requestId };
-  }
-
-  return { requestId, status: 'pending' };
+  if (!ins.ok) throw new Error('wallet_insert_failed');
+  const [row] = await ins.json();
+  return row;
 }
 
-async function createWithdrawRequest(client, userId, { amount, destination, note }) {
-  const { data: walletRow, error } = await fetchWallet(client, userId);
-  if (error) {
-    return { error, code: 'wallet_fetch_failed' };
-  }
-  const balanceBefore = Number(walletRow?.balance ?? 0);
-  if (balanceBefore < amount) {
-    const errObj = new Error('insufficient_balance');
-    errObj.code = 'insufficient_balance';
-    return { error: errObj, code: 'insufficient_balance', balance: balanceBefore };
-  }
+export default async function handler(req, res) {
+  const origin = req.headers.origin || '*';
+  if (req.method === 'OPTIONS') return ok(res, { ok: true }, origin);
+  if (req.method !== 'POST') return err(res, 405, 'method_not_allowed', origin);
 
-  const insert = await client
-    .from('withdraw_requests')
-    .insert({ user_id: userId, amount, destination, note, status: 'pending' })
-    .select('id')
-    .maybeSingle();
-  if (insert.error) {
-    return { error: insert.error, code: 'withdraw_request_insert_failed' };
-  }
+  const auth = req.headers.authorization || '';
+  const tma = auth.startsWith('tma ') ? auth.slice(4) : '';
+  if (!tma) return err(res, 400, 'missing_tma_or_admin_token', origin);
 
-  const requestId = insert.data?.id;
-  const masked = maskDestination(destination);
-  const { error: txnErr } = await insertTransaction(client, {
-    user_id: userId,
-    type: 'withdraw_pending',
-    amount: amount || 0,
-    balance_after: balanceBefore,
-    note: `withdraw request #${requestId} to ${masked}`,
-  });
-  if (txnErr) {
-    return { error: txnErr, code: 'txn_insert_failed', requestId };
-  }
-
-  return { requestId, status: 'pending' };
-}
-
-async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return bad(res, 'method_not_allowed');
-  }
-
-  let client;
+  let tuser;
   try {
-    client = createServiceClient();
-  } catch (e) {
-    return err(res, 'server_misconfig', { message: e.message });
+    tuser = verifyInitData(tma);
+  } catch {
+    return err(res, 400, 'tma_invalid', origin);
   }
+  const userId = String(tuser?.id || tuser?.user?.id || '');
 
-  const body = await readJSON(req);
-  if (!body || typeof body !== 'object') {
-    return bad(res, 'invalid_json');
-  }
+  let body;
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}); } catch { body = {}; }
+  const action = String(body.action || '');
 
-  const adminSecret = process.env.ADMIN_TOKEN ? String(process.env.ADMIN_TOKEN).trim() : '';
-  const adminHeader = String(req.headers['x-admin-token'] || '').trim();
-  const isAdminToken = adminSecret && adminHeader && adminHeader === adminSecret;
-  const action = String(body.action || '').trim();
+  if (!SUPABASE_URL || !SERVICE_ROLE) return err(res, 500, 'server_misconfigured', origin);
 
-  if (isAdminToken) {
-    const userId = String(body.userId || '').trim();
-    if (!userId) return bad(res, 'missing_userId');
-
+  try {
     if (action === 'deposit') {
-      const amount = Number(body.amount);
-      const method = String(body.method || '').slice(0, 50);
-      const ref = String(body.ref || '').slice(0, 64);
-      const note = String(body.note || '').slice(0, 200);
-      if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
-      if (!method) return bad(res, 'missing_method');
-      const result = await createDepositRequest(client, userId, { amount, method, ref, note });
-      if (result.error) {
-        const status = result.code === 'wallet_upsert_failed' ? 500 : 500;
-        return respond(res, status, { ok: false, reason: result.code, message: String(result.error.message || result.error) });
-      }
-      return ok(res, { rid: rid(), requestId: result.requestId, status: result.status });
+      const amount = Number(body.amount || 0);
+      const method = String(body.method || 'bank');
+      const ref = String(body.ref || '');
+      if (!(amount > 0)) return err(res, 400, 'bad_amount', origin);
+
+      const wallet = await ensureWallet(userId);
+      const balance_after = wallet.balance;
+
+      const insReq = await sfetch(`/deposit_requests`, {
+        method: 'POST',
+        body: JSON.stringify([{ user_id: userId, amount, method, ref }]),
+      });
+      if (!insReq.ok) return err(res, 500, 'deposit_request_failed', origin);
+
+      const insTxn = await sfetch(`/wallet_txns`, {
+        method: 'POST',
+        body: JSON.stringify([{
+          user_id: userId,
+          type: 'deposit_pending',
+          amount,
+          balance_after,
+          note: ref || 'deposit request',
+        }]),
+      });
+      if (!insTxn.ok) return err(res, 500, 'txn_insert_failed', origin);
+
+      const refreshed = await sfetch(`/wallets?user_id=eq.${userId}&select=user_id,balance&limit=1`);
+      const [current] = refreshed.ok ? await refreshed.json() : [wallet];
+      return ok(res, { ok: true, action: 'deposit', balance: current?.balance ?? balance_after }, origin);
     }
 
     if (action === 'withdraw') {
-      const amount = Number(body.amount);
-      const destination = String(body.destination || '').slice(0, 120);
-      const note = String(body.note || '').slice(0, 200);
-      if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
-      if (!destination) return bad(res, 'missing_destination');
-      const result = await createWithdrawRequest(client, userId, { amount, destination, note });
-      if (result.error) {
-        if (result.code === 'insufficient_balance') return bad(res, 'insufficient_balance', { balance: result.balance });
-        return err(res, result.code || 'withdraw_request_insert_failed', { message: String(result.error.message || result.error) });
-      }
-      return ok(res, { rid: rid(), requestId: result.requestId, status: result.status });
-    }
+      const amount = Number(body.amount || 0);
+      const destination = String(body.destination || '');
+      if (!(amount > 0)) return err(res, 400, 'bad_amount', origin);
 
-    if (action === 'credit' || action === 'debit') {
-      const delta = Number(body.delta);
-      const note = String(body.note || '').slice(0, 200);
-      if (!Number.isFinite(delta)) return bad(res, 'invalid_delta');
-      const result = await adjustWalletBalance(client, {
-        userId,
-        delta,
-        note,
-        type: delta >= 0 ? 'credit' : 'debit',
+      const wallet = await ensureWallet(userId);
+      const balance_after = wallet.balance;
+
+      const insReq = await sfetch(`/withdraw_requests`, {
+        method: 'POST',
+        body: JSON.stringify([{ user_id: userId, amount, destination }]),
       });
-      if (result.error) {
-        if (result.code === 'insufficient_balance') {
-          return bad(res, 'insufficient_balance', { balance: result.balance });
-        }
-        return err(res, result.code || 'wallet_update_failed', { message: String(result.error.message || result.error) });
-      }
-      return ok(res, { rid: rid(), userId, balance: result.balance });
+      if (!insReq.ok) return err(res, 500, 'withdraw_request_failed', origin);
+
+      const insTxn = await sfetch(`/wallet_txns`, {
+        method: 'POST',
+        body: JSON.stringify([{
+          user_id: userId,
+          type: 'withdraw_pending',
+          amount,
+          balance_after,
+          note: destination || 'withdraw request',
+        }]),
+      });
+      if (!insTxn.ok) return err(res, 500, 'txn_insert_failed', origin);
+
+      const refreshed = await sfetch(`/wallets?user_id=eq.${userId}&select=user_id,balance&limit=1`);
+      const [current] = refreshed.ok ? await refreshed.json() : [wallet];
+      return ok(res, { ok: true, action: 'withdraw', balance: current?.balance ?? balance_after }, origin);
     }
 
-    return bad(res, 'unknown_action');
+    return err(res, 400, 'unknown_action', origin);
+  } catch {
+    return err(res, 500, 'server_error', origin);
   }
-
-  const authHeader = String(req.headers.authorization || '');
-  const adminOverrideHeader = String(req.headers['x-admin-token'] || '');
-  let userId = '';
-
-  if (authHeader.startsWith('tma ')) {
-    const initData = authHeader.slice(4);
-    const verified = verifyInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
-    if (!verified?.ok) {
-      return bad(res, 'tma_invalid', { message: verified?.error || 'verify_failed' });
-    }
-    userId = String(verified.userId);
-  } else if (adminSecret && adminOverrideHeader === adminSecret) {
-    userId = String(body.userId || '').trim();
-    if (!userId) return bad(res, 'missing_userId_for_admin');
-  } else {
-    return bad(res, 'missing_tma_or_admin_token');
-  }
-
-  if (action === 'deposit') {
-    const amount = Number(body.amount);
-    const method = String(body.method || '').slice(0, 50);
-    const ref = String(body.ref || '').slice(0, 64);
-    const note = String(body.note || '').slice(0, 200);
-    if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
-    if (!method) return bad(res, 'missing_method');
-    const result = await createDepositRequest(client, userId, { amount, method, ref, note });
-    if (result.error) {
-      return err(res, result.code || 'deposit_request_insert_failed', { message: String(result.error.message || result.error), requestId: result.requestId, status: 'pending' });
-    }
-    return ok(res, { rid: rid(), requestId: result.requestId, status: result.status });
-  }
-
-  if (action === 'withdraw') {
-    const amount = Number(body.amount);
-    const destination = String(body.destination || '').slice(0, 120);
-    const note = String(body.note || '').slice(0, 200);
-    if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
-    if (!destination) return bad(res, 'missing_destination');
-    const result = await createWithdrawRequest(client, userId, { amount, destination, note });
-    if (result.error) {
-      if (result.code === 'insufficient_balance') return bad(res, 'insufficient_balance', { balance: result.balance });
-      return err(res, result.code || 'withdraw_request_insert_failed', { message: String(result.error.message || result.error), requestId: result.requestId, status: 'pending' });
-    }
-    return ok(res, { rid: rid(), requestId: result.requestId, status: result.status });
-  }
-
-  return bad(res, 'unknown_action');
 }
-
-export default withCors(handler, {
-  methods: ['POST', 'OPTIONS'],
-  exposeHeaders: ['Content-Type'],
-});
