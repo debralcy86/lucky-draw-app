@@ -22,7 +22,11 @@ async function handler(req, res) {
       return res.status(401).json({ ok: false, reason: 'missing_tma_header' });
     }
 
-    const initData = auth.slice(4);
+    // Extract initData string from header and normalize
+    const initData = auth.slice(4).trim();
+    if (!initData) {
+      return res.status(400).json({ ok: false, reason: 'empty_initdata' });
+    }
 
     // Validate signed payload; throws on failure/expiry
     validate(initData, BOT_TOKEN);
