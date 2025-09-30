@@ -1,7 +1,7 @@
 // wallet/v2 – REST-only
 export const config = { runtime: 'nodejs' };
 
-import { verifyInitData } from './_lib/telegramVerify.mjs';
+import verifyInitData from './_lib/telegramVerify.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -96,6 +96,7 @@ export default async function handler(req, res) {
           amount,
           balance_after,
           note: ref || 'deposit request',
+          created_at: new Date().toISOString(),
         }]),
       });
       if (!insTxn.ok) return err(res, 500, 'txn_insert_failed', origin);
@@ -127,6 +128,7 @@ export default async function handler(req, res) {
           amount,
           balance_after,
           note: destination || 'withdraw request',
+          created_at: new Date().toISOString(),
         }]),
       });
       if (!insTxn.ok) return err(res, 500, 'txn_insert_failed', origin);
