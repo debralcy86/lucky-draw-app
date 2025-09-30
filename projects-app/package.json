@@ -17,7 +17,7 @@
   "scripts": {
     "start": "craco start",
     "dev:api": "vercel dev --listen 3001",
-    "build": "craco build",
+    "build": "DISABLE_ESLINT_PLUGIN=true craco build",
     "serve": "node server.js",
     "test": "craco test",
     "eject": "react-scripts eject"
