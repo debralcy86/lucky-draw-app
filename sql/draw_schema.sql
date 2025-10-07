@@ -18,14 +18,16 @@ create table if not exists public.bets (
   id uuid primary key default gen_random_uuid(),
   user_id text not null,
   draw_id uuid not null references public.draws(id) on delete cascade,
+  group_code text not null check (group_code in ('A','B','C','D')),
   figure int not null check (figure between 1 and 36),
-  amount numeric(18,2) not null check (amount > 0),
+  amount integer not null check (amount > 0),
   created_at timestamptz not null default now()
 );
 
 -- Helpful indexes
 create index if not exists idx_draws_status_sched on public.draws(status, scheduled_at);
 create index if not exists idx_bets_draw on public.bets(draw_id);
+create index if not exists idx_bets_draw_group on public.bets(draw_id, group_code);
 create index if not exists idx_bets_user on public.bets(user_id);
 
 -- (Optional) RLS — enable reads only for own bets; draws are public-readable
@@ -58,4 +60,3 @@ end$$;
 
 -- Note: Inserts/updates for bets/draws will be performed by the server (service role),
 -- so we do not open write policies to the public for now.
-

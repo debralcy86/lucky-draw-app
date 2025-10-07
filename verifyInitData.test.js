@@ -1,8 +1,8 @@
 // verifyInitData.test.js — clean CLI verifier
 // Usage:
-//   BOT_TOKEN=123456:AA... INIT_DATA="user=...&auth_date=...&hash=..." node verifyInitData.test.js
-//   BOT_TOKEN=123456:AA... node verifyInitData.test.js "tma user=...&auth_date=...&hash=..."
-//   BOT_TOKEN=123456:AA... node verifyInitData.test.js "Authorization: tma user=...&auth_date=...&hash=..."
+//   TELEGRAM_BOT_TOKEN=123456:AA... INIT_DATA="user=...&auth_date=...&hash=..." node verifyInitData.test.js
+//   TELEGRAM_BOT_TOKEN=123456:AA... node verifyInitData.test.js "tma user=...&auth_date=...&hash=..."
+//   TELEGRAM_BOT_TOKEN=123456:AA... node verifyInitData.test.js "Authorization: tma user=...&auth_date=...&hash=..."
 
 import { validate } from '@telegram-apps/init-data-node';
 
@@ -13,11 +13,15 @@ function stripWrapper(s = '') {
   return x;
 }
 
-const token =
-  (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const legacyToken = (process.env.BOT_TOKEN || '').trim();
+if (legacyToken) {
+  console.warn('[verify-init] BOT_TOKEN is deprecated. Rename it to TELEGRAM_BOT_TOKEN.');
+}
+
+const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 
 if (!token) {
-  console.error('Missing bot token. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN.');
+  console.error('Missing bot token. Set TELEGRAM_BOT_TOKEN.');
   process.exit(1);
 }
 

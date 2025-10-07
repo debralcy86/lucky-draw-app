@@ -8,14 +8,14 @@ Quick steps to validate a Telegram `initData` string locally and on your backend
 - Run with envs:
 
 ```
-BOT_TOKEN="123456789:AA..." INIT_DATA="query_id=...&user=...&auth_date=...&hash=..." npm run verify:init
+TELEGRAM_BOT_TOKEN="123456789:AA..." INIT_DATA="query_id=...&user=...&auth_date=...&hash=..." npm run verify:init
 ```
 
 - Or pass as CLI arg (raw or header form):
 
 ```
-BOT_TOKEN="123456789:AA..." npm run verify:init -- "tma query_id=...&user=...&auth_date=...&hash=..."
-BOT_TOKEN="123456789:AA..." npm run verify:init -- "Authorization: tma query_id=...&user=...&auth_date=...&hash=..."
+TELEGRAM_BOT_TOKEN="123456789:AA..." npm run verify:init -- "tma query_id=...&user=...&auth_date=...&hash=..."
+TELEGRAM_BOT_TOKEN="123456789:AA..." npm run verify:init -- "Authorization: tma query_id=...&user=...&auth_date=...&hash=..."
 ```
 
 The script prints a short preview and exits non‑zero on failure.
@@ -49,7 +49,7 @@ fetch('/api/profile', {
 You can generate a signed initData string for any bot token and user id:
 
 ```
-BOT_TOKEN="123456789:AA..." npm run gen:init -- --user-id=42 --first=Alice --username=alice --query=AA-Local
+TELEGRAM_BOT_TOKEN="123456789:AA..." npm run gen:init -- --user-id=42 --first=Alice --username=alice --query=AA-Local
 ```
 
 Flags:
@@ -59,6 +59,6 @@ Flags:
 Then verify it:
 
 ```
-INIT_DATA="$(BOT_TOKEN=123456789:AA... npm run -s gen:init -- --user-id=42)" \
-  BOT_TOKEN=123456789:AA... npm run verify:init
+INIT_DATA="$(TELEGRAM_BOT_TOKEN=123456789:AA... npm run -s gen:init -- --user-id=42)" \
+  TELEGRAM_BOT_TOKEN=123456789:AA... npm run verify:init
 ```

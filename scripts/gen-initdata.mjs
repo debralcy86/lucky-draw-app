@@ -2,8 +2,8 @@
 // scripts/gen-initdata.mjs
 // Generate a signed Telegram Mini App initData string for local testing.
 // Usage examples:
-//   BOT_TOKEN=123456:AA... node scripts/gen-initdata.mjs --user-id=111222333 --first=Test --username=dummy
-//   BOT_TOKEN=123456:AA... node scripts/gen-initdata.mjs --user-id=1 --tma    # prints with 'tma ' prefix
+//   TELEGRAM_BOT_TOKEN=123456:AA... node scripts/gen-initdata.mjs --user-id=111222333 --first=Test --username=dummy
+//   TELEGRAM_BOT_TOKEN=123456:AA... node scripts/gen-initdata.mjs --user-id=1 --tma    # prints with 'tma ' prefix
 
 import crypto from 'node:crypto';
 
@@ -16,9 +16,14 @@ function arg(name, def = '') {
   return def;
 }
 
-const token = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const legacyToken = (process.env.BOT_TOKEN || '').trim();
+if (legacyToken) {
+  console.warn('[gen-init] BOT_TOKEN is deprecated. Rename it to TELEGRAM_BOT_TOKEN.');
+}
+
+const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 if (!token) {
-  console.error('BOT_TOKEN (or TELEGRAM_BOT_TOKEN) is required.');
+  console.error('TELEGRAM_BOT_TOKEN is required.');
   process.exit(1);
 }
 
@@ -60,4 +65,3 @@ console.error('generated', {
   init_len: raw.length,
   preview: raw.slice(0, 60),
 });
-
