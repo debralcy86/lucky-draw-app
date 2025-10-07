@@ -896,6 +896,7 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
   const [activeDrawId, setActiveDrawId] = useState(null);
   const [betError, setBetError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [groupTotals, setGroupTotals] = useState({ A: 0, B: 0, C: 0, D: 0 });
 
   const handleWalletRefreshError = useCallback((message) => {
     if (message) {
