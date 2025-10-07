@@ -71,6 +71,8 @@
       <button class="tab" data-tab="draws">Draws</button>
       <button class="tab" data-tab="txns">Transactions</button>
       <button class="tab" data-tab="withdraws">Withdraws</button>
+      <button class="tab" data-tab="deposits">Deposits</button>
+      <button class="tab" data-tab="reports">Reports</button>
     </div>
     <div style="margin-left:auto" id="adminBadge" class="chip">Checking admin…</div>
     <span id="rid" class="chip" title="request id" style="margin-left:8px"></span>
@@ -235,13 +237,62 @@
         </div>
       </div>
     </section>
+
+  <!-- DEPOSITS -->
+    <section id="panel-deposits" style="display:none">
+      <div class="card">
+        <div class="label">Filter</div>
+        <div class="row mt8">
+          <div>
+            <label class="sublabel">Status</label>
+            <select id="depStatus">
+              <option value="pending" selected>Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="">Any</option>
+            </select>
+          </div>
+          <div style="display:flex; gap:10px; align-items:flex-end;">
+        <button id="btnReloadDeps" class="primary">Reload</button>
+      </div>
+    </div>
+    <div class="mt12">
+      <table id="depTable">
+        <thead><tr>
+          <th>When (MYT)</th><th>User</th><th class="right">Amount</th><th>Note</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="mt12 flex">
+      <button id="btnMoreDeps">Load more</button>
+      <span id="depsHint" class="muted">Showing latest</span>
+    </div>
+  </div>
+</section>
+<!-- REPORTS -->
+<section id="panel-reports" style="display:none">
+  <div class="card">
+    <div class="label">Select Table</div>
+    <div class="row mt8">
+      <select id="repTable">
+        <option value="withdraw_requests">Withdraw Requests</option>
+        <option value="deposit_requests">Deposit Requests</option>
+        <option value="wallet_txns">Wallet Transactions</option>
+        <option value="profiles">Profiles</option>
+      </select>
+      <button id="btnLoadReport" class="primary">Load</button>
+    </div>
+    <div class="mt12" id="repOutput">Select a table to view report</div>
+  </div>
+</section>
   </main>
 
   <div id="toast" class="toast mono"></div>
 
   <script type="module">
     import { getInitData, authHeader } from "/web/_tg.js?v=2";
-    console.log('TAG: admin-02');
+    console.log('TAG: admin-07');
     try { window.Telegram?.WebApp?.ready?.(); window.Telegram?.WebApp?.expand?.(); } catch {}
     // Local fallback: show a banner if the page isn't opened inside Telegram
     function showNoTelegramBanner(id = "tg-warning") {
@@ -302,14 +353,39 @@
       const t = $("#toast"); t.textContent = msg; t.className = "toast mono show"; if (kind) t.classList.add(kind);
       setTimeout(()=>t.classList.remove("show"), 3000);
     };
+    function setTableLoading(tbodyId, text = 'Loading…') {
+      const tb = document.querySelector(tbodyId);
+      if (!tb) return;
+      tb.innerHTML = `<tr><td class="muted" colspan="999">${text}</td></tr>`;
+    }
+    function setTableEmpty(tbodyId, text = 'No records') {
+      const tb = document.querySelector(tbodyId);
+      if (!tb) return;
+      tb.innerHTML = `<tr><td class="muted" colspan="999">${text}</td></tr>`;
+    }
+    let DEP_LOADED = false;
+    let REP_LOADED = false;
     const setTab = id => {
       $all(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === id));
       $("#panel-overview").style.display = id==="overview"?"block":"none";
       $("#panel-draws").style.display = id==="draws"?"block":"none";
       $("#panel-txns").style.display = id==="txns"?"block":"none";
       $("#panel-withdraws").style.display = id==="withdraws"?"block":"none";
-    };
-    $all(".tab").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+      $("#panel-deposits").style.display = id==="deposits"?"block":"none";
+      $("#panel-reports").style.display = id==="reports"?"block":"none";
+    };  
+    $all(".tab").forEach(b => b.addEventListener("click", () => {
+      const tab = b.dataset.tab;
+      setTab(tab);
+      if (tab === 'deposits' && !DEP_LOADED) {
+        DEP_LOADED = true;
+        if (typeof loadDeposits === 'function') loadDeposits(true);
+      }
+      if (tab === 'reports' && !REP_LOADED) {
+        REP_LOADED = true;
+        if (typeof loadReport === 'function') loadReport();
+      }
+    }));
 
     // ---------- Admin Gate ----------
     let ADMIN = false;
@@ -634,7 +710,84 @@
     $("#btnMoreWds").addEventListener("click", ()=>loadWithdraws(false));
     $("#wdStatus").addEventListener("change", ()=>loadWithdraws(true));
 
-    // ---------- Bootstrap ----------
+// [REMOVED DUPLICATE Deposits BLOCK]
+// ---------- Reports ----------
+async function loadReport() {
+  const out = $("#repOutput");
+  out.textContent = 'Loading…';
+  try {
+    const table = $("#repTable").value;
+    const r = await postJSON("/api/admin", { action:"reports", table, limit:50 });
+    if (!r.ok) { out.textContent = 'Error loading report'; return; }
+    const rows = r.rows || [];
+    if (rows.length === 0) { out.textContent = 'No records'; return; }
+    let html = "<table><thead><tr>";
+    Object.keys(rows[0]).forEach(col => { html += `<th>${col}</th>`; });
+    html += "</tr></thead><tbody>";
+    rows.forEach(row => {
+      html += "<tr>";
+      Object.values(row).forEach(v => { html += `<td>${v}</td>`; });
+      html += "</tr>";
+    });
+    html += "</tbody></table>";
+    out.innerHTML = html;
+  } catch (e) {
+    out.textContent = 'Error loading report';
+    toast('Failed to load report', 'bad');
+  }
+}
+$("#btnLoadReport").addEventListener("click", loadReport);
+
+// [REMOVED DUPLICATE approveDeposit and event listeners]
+    
+// ---------- Deposits ----------
+let DEP_OFFSET = 0, DEP_LIMIT = 50;
+async function loadDeposits(reset=true) {
+  try {
+    if (reset) DEP_OFFSET = 0;
+    // show loading row
+    setTableLoading('#depTable tbody', 'Loading deposits…');
+    const status = $("#depStatus").value || "pending";
+    const r = await postJSON("/api/admin", { action:"list_deposits", status, limit:DEP_LIMIT, offset:DEP_OFFSET });
+    const rows = Array.isArray(r.deposits) ? r.deposits : [];
+
+    const tb = $("#depTable tbody");
+    tb.innerHTML = "";
+    if (rows.length === 0) {
+      setTableEmpty('#depTable tbody', `No ${status || 'recent'} deposits`);
+    } else {
+      rows.forEach(d => {
+        const ts = d.created_at ? MYT.format(new Date(d.created_at)) : "—";
+        const pending = d.status === "pending";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${ts}</td>
+          <td class="mono">${d.user_mask||d.user_id}</td>
+          <td class="right">${Number(d.amount||0).toFixed(2)}</td>
+          <td class="mono">${d.note||""}</td>
+          <td>${d.status}</td>
+          <td>${pending ? `<button class="primary" onclick="approveDeposit('${d.id}')">Approve</button>` : "—"}</td>
+        `;
+        tb.appendChild(tr);
+      });
+    }
+    DEP_OFFSET += DEP_LIMIT;
+    $("#depsHint").textContent = `Fetched ${rows.length} (server page) • status=${status}`;
+  } catch (e) {
+    toast('Failed to load deposits', 'bad');
+    setTableEmpty('#depTable tbody', 'Error loading deposits');
+  }
+}
+async function approveDeposit(id) {
+  const r = await postJSON("/api/admin", { action:"approve_deposit", requestId:id });
+  toast(r.ok ? "Deposit approved" : "Failed", r.ok?"ok":"bad");
+  await loadDeposits(true);
+}
+$("#btnReloadDeps").addEventListener("click", ()=>loadDeposits(true));
+$("#btnMoreDeps").addEventListener("click", ()=>loadDeposits(false));
+$("#depStatus").addEventListener("change", ()=>loadDeposits(true));
+
+// ---------- Bootstrap ----------
     async function boot() {
       setRID();
       await ensureAdmin();
@@ -659,7 +812,7 @@
   </script>
 
   <div class="tag" style="margin:12px 20px; font-size:12px; opacity:.7">
-    v: admin-02 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script>
+    v: admin-07 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script>
   </div>
 
   </div>
@@ -683,6 +836,7 @@
       }
     })();
   </script>
+</script>
 <script type="module">
   import { go } from '/web/_nav.js';
   document.querySelectorAll('[data-link]').forEach(a => {
@@ -695,6 +849,58 @@
 <script type="module">
   import { requireTelegramBanner } from '/web/_guard.js';
   requireTelegramBanner();
+</script>
+<script type="module">
+// User Management Enhancer — converts numeric search to text, removes overlays, wires search → backend
+(function(){
+  // Remove any dim/overlay elements commonly used by that layout
+  document.querySelectorAll('.overlay, #overlay, [data-overlay], .backdrop, .dim-bg').forEach(el => {
+    try { el.remove(); } catch {}
+  });
+
+  // Find a likely search input by id/name and coerce it to a text box
+  const input = document.querySelector('#userSearch, input[name="userSearch"], input[data-role="user-search"]');
+  if (input) {
+    if (input.type !== 'text') {
+      input.setAttribute('type','text');
+      input.removeAttribute('inputmode');
+      input.removeAttribute('pattern');
+    }
+    if (!input.placeholder) input.placeholder = 'Search user by ID, username, or name';
+
+    // Render helper for a generic results table if present
+    function renderUsers(users){
+      const tb = document.querySelector('#usersTable tbody, table[data-users] tbody');
+      if (!tb) return;
+      tb.innerHTML = '';
+      (users||[]).forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="mono">${u.id ?? u.user_id ?? ''}</td>
+          <td>${u.name ?? u.username ?? ''}</td>
+          <td class="mono">${u.contact ?? ''}</td>
+        `;
+        tb.appendChild(tr);
+      });
+    }
+
+    // Debounced fetch to backend admin users search
+    let t = null;
+    const onChange = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        try {
+          const q = input.value.trim();
+          const res = await postJSON('/api/admin', { action: 'users', query: q });
+          if (res && res.ok !== false) renderUsers(res.users || res.rows || []);
+        } catch (e) { /* silent */ }
+      }, 250);
+    };
+
+    input.addEventListener('input', onChange);
+    input.addEventListener('change', onChange);
+  }
+})();
 </script>
 </body>
 </html>

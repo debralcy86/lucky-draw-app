@@ -1,4 +1,21 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+// Inject once: remove focus ring for hotspot elements only
+if (typeof document !== 'undefined' && !document.getElementById('hotspot-no-focus-style')) {
+  const styleEl = document.createElement('style');
+  styleEl.id = 'hotspot-no-focus-style';
+  styleEl.textContent = `
+    /* Only affect elements we render with data-hotspot attr */
+    [data-hotspot] :focus { outline: none !important; box-shadow: none !important; }
+    [data-hotspot] input:focus,
+    [data-hotspot] select:focus,
+    [data-hotspot] button:focus {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+    [data-hotspot] * { -webkit-tap-highlight-color: transparent; }
+  `;
+  document.head.appendChild(styleEl);
+}
 
 const HANDLE_CONFIG = [
   { key: 'nw', cursor: 'nwse-resize', style: { left: 0, top: 0, transform: 'translate(-50%, -50%)' } },
@@ -667,6 +684,8 @@ export default function HotspotImage({
               aria-label={h.ariaLabel || h.title || 'hotspot'}
               title={h.title}
               aria-disabled={!isClickable}
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={(event) => {
                 if (!interactionsEnabled || !isClickable) {
                   event.preventDefault();
@@ -685,9 +704,11 @@ export default function HotspotImage({
                 borderRadius: 8,
                 cursor: (editable || !interactionsEnabled || !isClickable) ? 'default' : 'pointer',
                 pointerEvents: (editable || !interactionsEnabled || !isClickable) ? 'none' : 'auto',
+                outline: 'none',
+                boxShadow: 'none',
+                WebkitTapHighlightColor: 'transparent',
               }}
-              onFocus={(e) => (e.currentTarget.style.border = '2px solid #2d6cdf')}
-              onBlur={(e) => (e.currentTarget.style.border = '2px solid transparent')}
+              onFocus={(e) => e.currentTarget.blur()}
             />
             {overlayEl}
           </React.Fragment>
@@ -695,62 +716,30 @@ export default function HotspotImage({
       })}
 
       {editable && renderRect(drag)}
-      {(editable || onBack) && (
-        <div data-ui-overlay="true" onMouseDown={(e)=>e.stopPropagation()} onTouchStart={(e)=>e.stopPropagation()} style={{ position: 'absolute', left: 8, right: 8, top: 8, background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '6px 8px', borderRadius: 6, fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', userSelect: 'text' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {onBack && (
-              <button onClick={onBack} style={{ padding: '2px 8px' }}>{backLabel}</button>
-            )}
-          </div>
-          {editable && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap 1%
-              </label>
-              <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input type="checkbox" checked={twoClick} onChange={(e) => setTwoClick(e.target.checked)} /> Two-click
-              </label>
-              <button onClick={() => copyDraft(draftSnippet)} disabled={!draftSnippet} style={{ padding: '2px 6px', opacity: draftSnippet ? 1 : 0.6 }}>
-                Copy
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {editable && draftDisplay && (
-        <div
+      {onBack && (
+        <button
           data-ui-overlay="true"
-          onMouseDown={(e)=>e.stopPropagation()}
-          onTouchStart={(e)=>e.stopPropagation()}
+          onClick={onBack}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            left: draftDisplay.left,
-            top: draftDisplay.top,
-            transform: 'translate(-8px, calc(-100% - 12px))',
-            background: 'rgba(0,0,0,0.7)',
-            color: '#fff',
-            padding: '6px 8px',
-            borderRadius: 6,
-            fontSize: 12,
-            userSelect: 'text',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
+            left: 8,
+            top: 8,
+            padding: '6px 12px',
+            borderRadius: 999,
+            border: '1px solid rgba(0,0,0,0.1)',
+            background: '#ffffffcc',
+            color: '#111',
+            fontSize: 13,
+            fontWeight: 600,
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
           }}
         >
-          <span style={{ whiteSpace: 'nowrap' }}>Draft:</span>
-          <input
-            readOnly
-            value={draftSnippet}
-            onFocus={(e) => e.target.select()}
-            style={{ fontSize: 12, width: 360, border: '1px solid #999', borderRadius: 4, padding: '2px 4px', background: '#222', color: '#fff' }}
-          />
-          <button onClick={() => copyDraft(draftSnippet)} disabled={!draftSnippet} style={{ padding: '2px 6px', opacity: draftSnippet ? 1 : 0.6 }}>
-            Copy
-          </button>
-        </div>
+          {backLabel}
+        </button>
       )}
+      
     </div>
   );
 }

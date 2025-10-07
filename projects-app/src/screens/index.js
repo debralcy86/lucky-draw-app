@@ -1,9 +1,11 @@
+import HotspotImage from '../components/HotspotImage'
+import { formatGroup, formatFigure, formatGroupFigure } from '../lib/formatters.mjs';
+
 // Option B implementation: PNG-backed screens with an action bar.
 // Each screen receives one prop: onNavigate(nextKey, params?)
 
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useAppState } from '../state/appState';
-import HotspotImage from '../components/HotspotImage';
 
 // PNG imports (figma assets)
 import PngLogin from '../assets/figma/01.1_Login_Register.png';
@@ -25,6 +27,7 @@ import PngAdminUsers from '../assets/figma/10_Admin_User_Management.png';
 import PngAdminPoints from '../assets/figma/11_Admin_Points_Tracking.png';
 import PngAdminFigures from '../assets/figma/12_Admin_Figures_Data.png';
 import PngAdminResults from '../assets/figma/13_Admin_Result_Posting.png';
+import PngAdminReports from '../assets/figma/14_Admin_Reports.png'
 
 // Telegram bot wiring (centralized)
 // You can override at runtime by setting window.__BOT_USERNAME__ = 'LuckyDrawForUBot'
@@ -38,7 +41,7 @@ export function tgBotLink(path = 'startapp', param = '') {
 
 const FIGURE_GRID_COORDS = (() => {
   const rows = [
-    { top: 29.93, width: 11.83, height: 3.43, start: 10.45, spacing: 12.41 },
+    { top: 29.93, width: 12.79, height: 3.20, start: 10.45, spacing: 13.05 },
     { top: 39.36, width: 12.79, height: 3.20, start: 10.45, spacing: 13.05 },
     { top: 48.79, width: 12.79, height: 3.20, start: 10.45, spacing: 13.05 },
     { top: 58.22, width: 12.79, height: 3.20, start: 10.45, spacing: 13.05 },
@@ -65,6 +68,23 @@ const FIGURE_GRID_COORDS = (() => {
     })
   )).map((entry) => overrides[entry.id] ? { ...entry, ...overrides[entry.id] } : entry);
 })();
+
+// Persist staged bets across Board screens
+const STAGED_KEY = 'LD_staged_bets_v1';
+function readStagedBets() {
+  try {
+    const raw = localStorage.getItem(STAGED_KEY);
+    const obj = raw ? JSON.parse(raw) : null;
+    if (obj && ['A','B','C','D'].every(k => obj[k] && typeof obj[k] === 'object')) return obj;
+  } catch {}
+  return { A:{}, B:{}, C:{}, D:{} };
+}
+function writeStagedBets(map) {
+  try { localStorage.setItem(STAGED_KEY, JSON.stringify(map)); } catch {}
+}
+function clearStagedBets() {
+  try { localStorage.removeItem(STAGED_KEY); } catch {}
+}
 
 const BOARD_GROUPS = ['A', 'B', 'C', 'D'];
 
@@ -104,6 +124,13 @@ function createActionHotspots(group, onPlace) {
     { key: `total${group}`, title: 'Total Points Panel', ...TOTAL_PANEL_RECT },
     { key: `place${group}`, title: 'Place Points', ...PLACE_BUTTON_RECT, onClick: onPlace },
   ];
+}
+
+function createEmptyBetsMap() {
+  return BOARD_GROUPS.reduce((acc, grp) => {
+    acc[grp] = {};
+    return acc;
+  }, {});
 }
 
 function useHotspotDebug(label, enabled, hotspots) {
@@ -147,6 +174,72 @@ function safeTrim(value) {
   if (typeof value === 'string') return value.trim();
   if (value == null) return '';
   return String(value).trim();
+}
+
+function normalizeBetsFromResponse(bets) {
+  if (!Array.isArray(bets)) return [];
+  return bets.map((bet) => {
+    const rawGroup = bet.group || bet.group_code || bet.groupCode || '';
+    const group = typeof rawGroup === 'string' ? rawGroup.trim().toUpperCase() : '';
+    const createdAt = bet.created_at || bet.createdAt || bet.timestamp || null;
+    const points = Number(bet.points ?? bet.amount ?? 0);
+    return {
+      ...bet,
+      group,
+      points,
+      created_at: createdAt,
+      createdAt,
+    };
+  });
+}
+
+async function requestWalletAndHistory(initDataValue, { fallbackUserId = '', debug = false } = {}) {
+  try {
+    const res = await fetch('/api/data-balance', {
+      method: 'GET',
+      headers: {
+        'Authorization': 'tma ' + initDataValue,
+      },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (debug) {
+        console.log('data-balance response (error)', { status: res.status, json });
+      }
+      const errorMessage = json?.error ? `Balance fetch failed: ${json.error}` : 'Balance fetch failed.';
+      return { wallet: null, txns: [], bets: [], errorMessage };
+    }
+    const walletPayload = json?.wallet || (fallbackUserId ? { user_id: fallbackUserId, balance: 0 } : null);
+    const txnsPayload = Array.isArray(json?.txns) ? json.txns : [];
+    const betsPayload = normalizeBetsFromResponse(json?.bets);
+    return { wallet: walletPayload, txns: txnsPayload, bets: betsPayload, errorMessage: '' };
+  } catch (err) {
+    if (debug) {
+      console.log('data-balance fetch exception', err);
+    }
+    return { wallet: null, txns: [], bets: [], errorMessage: 'Unable to load wallet data.' };
+  }
+}
+
+function useLoadWalletAndHistory({ debug = false, setWalletData, onError }) {
+  return useCallback(async (initDataValue, options = {}) => {
+    const { silent = false, fallbackUserId = '' } = options || {};
+    if (!initDataValue) return null;
+
+    const result = await requestWalletAndHistory(initDataValue, { fallbackUserId, debug });
+    if (!result || result.errorMessage) {
+      if (!silent && result?.errorMessage && typeof onError === 'function') {
+        onError(result.errorMessage);
+      }
+      return null;
+    }
+
+    const { wallet, txns, bets } = result;
+    if ((wallet || txns.length || bets.length) && typeof setWalletData === 'function') {
+      setWalletData({ wallet, txns, bets });
+    }
+    return { wallet, txns, bets };
+  }, [debug, onError, setWalletData]);
 }
 
 // --- end helper ---
@@ -202,14 +295,13 @@ export function WelcomeScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button onClick={() => onNavigate('login')}>Continue</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
 }
 
 export function LoginScreen({ onNavigate, debug = false }) {
-  const { setAuth, setWalletData } = useAppState();
+  const { state, setAuth, setWalletData } = useAppState();
   const [edit, setEdit] = useState(false);
   // Auto-generated user id display (non-interactive field)
   const [userId, setUserId] = useState('');
@@ -224,42 +316,15 @@ export function LoginScreen({ onNavigate, debug = false }) {
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  const loadWalletAndHistory = useCallback(async (initDataValue, options = {}) => {
-    const { silent = false, fallbackUserId = '' } = options || {};
-    if (!initDataValue) return null;
-    try {
-      const res = await fetch('/api/data-balance', {
-        method: 'GET',
-        headers: {
-          'Authorization': 'tma ' + initDataValue,
-        },
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (!silent) {
-          setErrorMessage(json?.error ? `Balance fetch failed: ${json.error}` : 'Balance fetch failed.');
-        }
-        if (debug) {
-          console.log('data-balance response (error)', { status: res.status, json });
-        }
-        return null;
-      }
-      const walletPayload = json?.wallet || (fallbackUserId ? { user_id: fallbackUserId, balance: 0 } : null);
-      const txnsPayload = Array.isArray(json?.txns) ? json.txns : [];
-      if (walletPayload || txnsPayload.length) {
-        setWalletData({ wallet: walletPayload, txns: txnsPayload });
-      }
-      return { wallet: walletPayload, txns: txnsPayload };
-    } catch (err) {
-      if (!silent) {
-        setErrorMessage('Unable to load wallet data.');
-      }
-      if (debug) {
-        console.log('data-balance fetch exception', err);
-      }
-      return null;
-    }
-  }, [debug, setWalletData, setErrorMessage]);
+  const handleWalletError = useCallback((message) => {
+    setErrorMessage(message || '');
+  }, [setErrorMessage]);
+
+  const loadWalletAndHistory = useLoadWalletAndHistory({
+    debug,
+    setWalletData,
+    onError: handleWalletError,
+  });
 
   // Prefill userId + profile from cache → Telegram → backend
   useEffect(() => {
@@ -368,15 +433,21 @@ export function LoginScreen({ onNavigate, debug = false }) {
             name: profileForAuth?.name || '',
             contact: profileForAuth?.contact || '',
             status: exists ? 'verified' : 'pending',
+            withdrawMethod: profileForAuth?.withdraw_method || '',
+            withdrawDest: profileForAuth?.withdraw_dest || '',
+            withdrawHolder: profileForAuth?.withdraw_holder || '',
             profile: profileForAuth,
           });
         }
 
-        if (json?.wallet) {
-          setWalletData({ wallet: json.wallet, txns: [] });
+        const fetched = await loadWalletAndHistory(initData, { silent: true, fallbackUserId: resolvedUserId || '' });
+        if (json?.wallet || fetched?.wallet || fetched?.txns || fetched?.bets) {
+          setWalletData({
+            wallet: fetched?.wallet || json?.wallet || state.wallet,
+            txns: fetched?.txns || state.walletTxns || [],
+            bets: Array.isArray(fetched?.bets) ? fetched.bets : state.bets || [],
+          });
         }
-
-        await loadWalletAndHistory(initData, { silent: true, fallbackUserId: resolvedUserId || '' });
       } catch (e) {
         if (!alive) return;
         const message = e?.message ? String(e.message) : String(e);
@@ -524,6 +595,9 @@ export function LoginScreen({ onNavigate, debug = false }) {
       name: savedProfile?.name || trimmedName,
       contact: savedProfile?.contact || trimmedContact,
       status: 'registered',
+      withdrawMethod: savedProfile?.withdraw_method || '',
+      withdrawDest: savedProfile?.withdraw_dest || '',
+      withdrawHolder: savedProfile?.withdraw_holder || '',
       profile: savedProfile,
     });
     if (savedWallet) {
@@ -674,8 +748,12 @@ export function DashboardScreen({ onNavigate, debug = false }) {
         });
         const json = await res.json().catch(() => ({}));
         if (!active) return;
-        if (res.ok && (json?.wallet || Array.isArray(json?.txns))) {
-          setWalletData({ wallet: json.wallet || null, txns: Array.isArray(json.txns) ? json.txns : [] });
+        if (res.ok && (json?.wallet || Array.isArray(json?.txns) || Array.isArray(json?.bets))) {
+          setWalletData({
+            wallet: json.wallet || null,
+            txns: Array.isArray(json.txns) ? json.txns : [],
+            bets: normalizeBetsFromResponse(json.bets),
+          });
         } else if (debug) {
           console.log('dashboard data-balance response', { status: res.status, json });
         }
@@ -687,70 +765,54 @@ export function DashboardScreen({ onNavigate, debug = false }) {
     })();
     return () => { active = false; };
   }, [debug, setWalletData, state?.auth?.userId]);
+
+  // TAG: dashboard-pts-01
+  const [ptsBalance, setPtsBalance] = useState(0);
+  useEffect(() => {
+    const init = getInitData && getInitData();
+    if (!init) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/data-balance', { headers: { Authorization: 'tma ' + init } });
+        const j = await r.json().catch(() => ({}));
+        const b = (j && (j.balance ?? j?.wallet?.balance)) ?? 0;
+        setPtsBalance(Number(b) || 0);
+      } catch {}
+    })();
+  }, []);
+
+  // Admin button hotspot logic: only visible for admins
+  const isAdmin = state?.auth?.isAdmin;
   const hotspots = [
+    // Balance display (NON-NAV, NON-TAP) rendered as a read-only input overlay
     {
-      ...( // preserve key/title/kind if present
-        { key: 'balanceBanner', title: `Points balance: ${balance.toLocaleString()} pts`, ariaLabel: 'Current points balance', onClick: () => alert(`Points balance: ${balance.toLocaleString()} pts`) }
-      ),
-      left: '5.21%',
-      top: '20.54%',
-      width: '86.73%',
-      height: '9.31%',
-    },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileJoin', title: 'Join Lucky Draw', onClick: () => onNavigate('join') }
-      ),
+      key: 'ptsDisplay',
+      kind: 'input',
+      title: 'Points Balance',
       left: '4.00%',
-      top: '32.00%',
-      width: '86.00%',
-      height: '4.00%',
+      top: '23.00%',
+      width: '90.00%',
+      height: '8.00%',
+      value: `Points balance: ${Number(ptsBalance).toLocaleString()} pts`,
+      readOnly: true,
+      inputType: 'text',
+      tabIndex: -1,
+      onFocus: (e) => e.target.blur(),
+      inputStyle: { textAlign: 'center', padding: '6px 10px', fontFamily: 'Inter, sans-serif', fontWeight: 'bold', fontSize: 18, backgroundColor: 'rgba(255,255,255,0)', outline: '1px solid rgba(255,255,255,0)' }
     },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileHistory', title: 'Point History', onClick: () => onNavigate('history') }
-      ),
-      left: '4.55%',
-      top: '37.67%',
-      width: '86.31%',
-      height: '3.67%',
-    },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileDeposit', title: 'Deposit Points', onClick: () => onNavigate('deposit') }
-      ),
-      left: '4.62%',
-      top: '42.61%',
-      width: '86.69%',
-      height: '3.55%',
-    },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileWithdraw', title: 'Withdraw Points', onClick: () => onNavigate('withdrawRequest') }
-      ),
-      left: '4.86%',
-      top: '47.85%',
-      width: '86.44%',
-      height: '3.88%',
-    },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileProfile', title: 'Profile / Withdraw', onClick: () => onNavigate('withdrawSetup') }
-      ),
-      left: '4.62%',
-      top: '52.96%',
-      width: '86.44%',
-      height: '3.77%',
-    },
-    {
-      ...( // preserve key/title/kind if present
-        { key: 'tileInvite', title: 'Invite / QR Link', onClick: () => onNavigate('invite') }
-      ),
-      left: '4.62%',
-      top: '58.06%',
-      width: '86.44%',
-      height: '3.99%',
-    },
+    // Header back area (consistent pattern)
+    { key: 'hdrBack', title: 'Log Out', left: '3.00%', top: '8.00%', width: '20.00%', height: '6.00%', onClick: () => onNavigate('login') },
+    // Main action tiles (normalized widths/heights)
+    { key: 'tileJoin',     title: 'Join Lucky Draw',   left: '4.00%', top: '32.00%', width: '86.00%', height: '4.00%',  onClick: () => onNavigate('join') },
+    { key: 'tileHistory',  title: 'Point History',     left: '4.00%', top: '37.67%', width: '86.31%', height: '3.67%', onClick: () => onNavigate('history') },
+    { key: 'tileDeposit',  title: 'Deposit Points',    left: '4.00%', top: '42.61%', width: '86.69%', height: '3.55%', onClick: () => onNavigate('deposit') },
+    { key: 'tileWithdraw', title: 'Withdraw Points',   left: '4.00%', top: '45.85%', width: '86.44%', height: '3.88%', onClick: () => onNavigate('withdrawRequest') },
+    { key: 'tileProfile',  title: 'Profile / Withdraw',left: '4.00%', top: '49.96%', width: '86.44%', height: '3.77%', onClick: () => onNavigate('withdrawSetup') },
+    { key: 'tileInvite',   title: 'Invite / QR Link',  left: '4.00%', top: '56.06%', width: '86.44%', height: '3.99%', onClick: () => onNavigate('invite') },
+    // Admin hotspot: only visible if isAdmin
+    ...(isAdmin ? [
+      { key: 'admin', title: 'Admin', left: '4.00%', top: '80.00%', width: '91.00%', height: '5.00%', onClick: () => onNavigate('adminDashboard') }
+    ] : [])
   ];
   const showOverlay = edit;
   useHotspotDebug('dashboard', debug, hotspots);
@@ -768,15 +830,7 @@ export function DashboardScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('login')}>Back</button>
-        <button onClick={() => onNavigate('join')}>Join</button>
-        <button onClick={() => onNavigate('history')}>History</button>
-        <button onClick={() => onNavigate('deposit')}>Deposit</button>
-        <button onClick={() => onNavigate('withdrawRequest')}>Withdraw</button>
-        <button onClick={() => onNavigate('withdrawSetup')}>Profile</button>
-        <button onClick={() => onNavigate('invite')}>Invite</button>
-        <button onClick={() => onNavigate('adminDashboard')}>Admin</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
-        <span style={{marginLeft:8, fontSize:12, opacity:0.7}}>v: dashboard-04</span>
+        <span style={{marginLeft:8, fontSize:12, opacity:0.7}}>v: dashboard-05</span>
       </div>
     </div>
   );
@@ -828,79 +882,200 @@ export function JoinScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
 }
 
 function BoardScreenBase({ group, onNavigate, debug = false }) {
-  const { state, placeBet } = useAppState();
+  const { state, setWalletData } = useAppState();
   const balance = state?.wallet?.balance ?? 0;
   const [edit, setEdit] = useState(false);
   const [points] = useState(10);
-  const [betsByGroup, setBetsByGroup] = useState(() => BOARD_GROUPS.reduce((acc, grp) => {
-    acc[grp] = {};
-    return acc;
-  }, {}));
+  const [betsByGroup, setBetsByGroup] = useState(() => readStagedBets());
+  const [activeDrawId, setActiveDrawId] = useState(null);
+  const [betError, setBetError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    console.log('TAG: board-place-guard-01');
-  }, []);
+  const handleWalletRefreshError = useCallback((message) => {
+    if (message) {
+      setBetError(message);
+      if (debug) {
+        console.warn('[board] wallet refresh error', message);
+      }
+    }
+  }, [debug, setBetError]);
+
+  const loadWalletAndHistory = useLoadWalletAndHistory({
+    debug,
+    setWalletData,
+    onError: handleWalletRefreshError,
+  });
 
   const groupBets = betsByGroup[group] || {};
+
+  const stagedTotals = useMemo(() => (
+    BOARD_GROUPS.reduce((acc, grp) => {
+      const staged = Object.values(betsByGroup[grp] || {}).reduce((sum, value) => sum + Math.max(0, Math.floor(Number(value) || 0)), 0);
+      acc[grp] = staged;
+      return acc;
+    }, {})
+  ), [betsByGroup]);
+
+  const hasAnyStaged = useMemo(
+    () => BOARD_GROUPS.some((grp) => stagedTotals[grp] > 0),
+    [stagedTotals]
+  );
 
   const toggleFigure = useCallback((figure) => {
     setBetsByGroup((prev) => {
       const currentGroup = { ...(prev[group] || {}) };
-      if (currentGroup[figure] == null) {
-        currentGroup[figure] = points;
-      }
-      return { ...prev, [group]: currentGroup };
+      if (currentGroup[figure] == null) currentGroup[figure] = points;
+      const next = { ...prev, [group]: currentGroup };
+      writeStagedBets(next);
+      return next;
     });
   }, [group, points]);
 
   const setFigurePoints = useCallback((figure, value) => {
     setBetsByGroup((prev) => {
       const currentGroup = { ...(prev[group] || {}) };
-      if (value <= 0) {
-        delete currentGroup[figure];
-      } else {
-        currentGroup[figure] = value;
-      }
-      return { ...prev, [group]: currentGroup };
+      const n = Math.max(0, Math.floor(Number(value) || 0));
+      if (n <= 0) delete currentGroup[figure];
+      else currentGroup[figure] = n;
+      const next = { ...prev, [group]: currentGroup };
+      writeStagedBets(next);
+      return next;
     });
   }, [group]);
 
-  const handlePlacePoints = useCallback(() => {
-    const selected = betsByGroup[group] || {};
-    const entries = Object.entries(selected)
-      .map(([key, value]) => [Number(key), Math.max(0, Math.floor(Number(value) || 0))])
-      .filter(([, value]) => value > 0);
+  const fetchBetTotals = useCallback(async (initDataValue, drawIdHint = null) => {
+    if (!initDataValue) return;
+    try {
+      const res = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initDataValue,
+        },
+        body: JSON.stringify({
+          action: 'bet_totals',
+          draw_id: drawIdHint || activeDrawId || undefined,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.ok) {
+        const msg = json?.error || json?.reason || `Failed to load bet totals (${res.status})`;
+        console.warn('[board] bet_totals fetch failed', msg);
+        return;
+      }
+      const totals = json?.totals || {};
+      setGroupTotals(() => {
+        const map = {};
+        BOARD_GROUPS.forEach((grp) => {
+          map[grp] = Number(totals[grp] ?? 0);
+        });
+        return map;
+      });
+      setActiveDrawId((prev) => json.draw_id || drawIdHint || prev || null);
+    } catch (error) {
+      console.error('[board] bet_totals exception', error);
+    }
+  }, [activeDrawId]);
 
-    if (entries.length === 0) {
+  useEffect(() => {
+    const initData = getInitData();
+    if (!initData) return;
+    fetchBetTotals(initData);
+  }, [fetchBetTotals]);
+
+  const handlePlacePoints = useCallback(async () => {
+    const initData = getInitData();
+    if (!initData) {
+      alert('Open inside Telegram to continue (initData missing).');
       return;
     }
 
-    const total = entries.reduce((sum, [, value]) => sum + value, 0);
+    const entries = [];
+    BOARD_GROUPS.forEach((grp) => {
+      const staged = betsByGroup[grp] || {};
+      Object.entries(staged).forEach(([fig, value]) => {
+        const amount = Math.max(0, Math.floor(Number(value) || 0));
+        if (amount > 0) {
+          entries.push({ group: grp, figure: Number(fig), amount });
+        }
+      });
+    });
+
+    if (!entries.length) {
+      alert('Select at least one figure to place a bet.');
+      return;
+    }
+
+    const total = entries.reduce((sum, entry) => sum + entry.amount, 0);
     if (total > balance) {
       alert(`Total points (${total}) exceed your balance (${balance}). Reduce points or deposit more.`);
       return;
     }
 
-    const timestamp = new Date().toISOString();
-    for (const [figure, value] of entries) {
-      placeBet({ group, figure, points: value, drawAt: timestamp });
+    setSubmitting(true);
+    setBetError('');
+    try {
+      const res = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initData,
+        },
+        body: JSON.stringify({
+          action: 'bet',
+          draw_id: activeDrawId || undefined,
+          bets: entries,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.ok) {
+        const msg = json?.reason || json?.error || `Bet failed (${res.status})`;
+        setBetError(msg);
+        alert(msg);
+        await fetchBetTotals(initData, json?.draw_id || null);
+        return;
+      }
+
+      const newBalance = Number(json.balance ?? balance);
+      const updatedWallet = {
+        ...(state.wallet || {}),
+        user_id: state.wallet?.user_id || state.auth?.userId || '',
+        balance: newBalance,
+      };
+      const refreshed = await loadWalletAndHistory(initData, { silent: true, fallbackUserId: updatedWallet.user_id || '' });
+      setWalletData({
+        wallet: refreshed?.wallet || updatedWallet,
+        txns: refreshed?.txns || state.walletTxns || [],
+        bets: Array.isArray(refreshed?.bets) ? refreshed.bets : state.bets || [],
+      });
+
+      setBetsByGroup(createEmptyBetsMap());
+      clearStagedBets();
+      await fetchBetTotals(initData, json.draw_id || null);
+      alert('Bets placed!');
+      try { window.dispatchEvent(new CustomEvent('wallet:updated')); } catch {}
+      onNavigate('dashboard');
+    } catch (error) {
+      console.error('[board] bet submit error', error);
+      const msg = error?.message ? String(error.message) : 'Bet submission failed. Please try again.';
+      setBetError(msg);
+      alert(msg);
+    } finally {
+      setSubmitting(false);
     }
-    setBetsByGroup((prev) => ({ ...prev, [group]: {} }));
-    alert('Bets placed!');
-    onNavigate('dashboard');
-  }, [balance, betsByGroup, group, onNavigate, placeBet]);
+  }, [activeDrawId, balance, betsByGroup, fetchBetTotals, loadWalletAndHistory, onNavigate, setWalletData, state.auth, state.wallet, state.walletTxns]);
 
   const baseFigureHotspots = useMemo(
     () => FIGURE_GRID_COORDS.map(({ figure, left, top, width, height }) => ({
       key: `${group}_fig_${figure}`,
-      title: `Figure ${figure}`,
+      // Prefix group code to figure label
+      title: `${group}#${figure}`,
       figure,
       left,
       top,
@@ -917,7 +1092,8 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
       ? {
           key: `input_${group}_${figure}`,
           kind: 'input',
-          title: `Points for ${figure}`,
+          // Prefix group code to figure label
+          title: `Points for ${group}#${figure}`,
           left,
           top,
           width,
@@ -942,10 +1118,9 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
   const showOverlay = edit;
   useHotspotDebug(`board${group}`, debug, hotspots);
 
-  const totalPoints = useMemo(
-    () => Object.values(groupBets).reduce((sum, value) => sum + (Number(value) || 0), 0),
-    [groupBets],
-  );
+  const remoteGroupTotal = Number(groupTotals[group] || 0);
+  const stagedGroupTotal = Number(stagedTotals[group] || 0);
+  const totalPoints = remoteGroupTotal + stagedGroupTotal;
 
   const currentIndex = BOARD_GROUPS.indexOf(group);
   const prevGroup = currentIndex > 0 ? BOARD_GROUPS[currentIndex - 1] : null;
@@ -965,9 +1140,15 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
         onDraft={(draft) => { console.log(`${group} hotspot draft:`, draft); }}
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div><strong>Total Points:</strong> {totalPoints}</div>
-        <button disabled={Object.keys(groupBets).length === 0} onClick={handlePlacePoints}>Place Points</button>
-        <button onClick={() => setEdit((value) => !value)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <div>
+          <strong>Total Points:</strong> {totalPoints.toLocaleString()}&nbsp;
+          <span style={{ fontSize: 12, opacity: 0.7 }}>
+            ({remoteGroupTotal.toLocaleString()} pooled&nbsp;/ {stagedGroupTotal.toLocaleString()} staging)
+          </span>
+        </div>
+        <button disabled={!hasAnyStaged || submitting} onClick={handlePlacePoints}>
+          {submitting ? 'Placing…' : 'Place Points'}
+        </button>
         {prevGroup && (
           <button onClick={() => onNavigate('board', { group: prevGroup })}>{`← Prev: Group ${prevGroup}`}</button>
         )}
@@ -977,8 +1158,11 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
           <button onClick={() => onNavigate('dashboard')}>Done</button>
         )}
         <button onClick={() => onNavigate('join')}>Back</button>
-        <span style={{ marginLeft: 8, fontSize: 12, opacity: 0.7 }}>v: board-place-guard-01</span>
+        <span style={{ marginLeft: 8, fontSize: 12, opacity: 0.7 }}>draw: {activeDrawId || '—'}</span>
       </div>
+      {betError && (
+        <div style={{ marginTop: 8, color: '#b42318', fontSize: 13 }}>{betError}</div>
+      )}
     </div>
   );
 }
@@ -1000,19 +1184,63 @@ export function BoardDScreen(props) {
 }
 
 export function ConfirmScreen({ onNavigate, params, debug = false }) {
-  const { state, placeBet } = useAppState();
+  const { state, setWalletData } = useAppState();
   const wallet = state.wallet || { balance: 0 };
   const [points, setPoints] = useState(() => (params?.points ?? 10));
   const group = params?.group ?? 'A';
   const figure = params?.figure ?? 1;
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   const canPlace = useMemo(() => Number.isFinite(Number(points)) && Number(points) > 0 && Number(points) <= wallet.balance, [points, wallet.balance]);
 
-  function onPlace() {
+  async function onPlace() {
     const amt = Math.floor(Number(points) || 0);
     if (amt <= 0) return;
-    placeBet({ group, figure, points: amt, drawAt: new Date().toISOString() });
-    onNavigate('dashboard');
+    const initData = getInitData();
+    if (!initData) {
+      alert('Open inside Telegram to continue (initData missing).');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      const res = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initData,
+        },
+        body: JSON.stringify({
+          action: 'bet',
+          bets: [{ group, figure, amount: amt }],
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.ok) {
+        const msg = json?.reason || json?.error || `Bet failed (${res.status})`;
+        setError(msg);
+        alert(msg);
+        return;
+      }
+      const newBalance = Number(json.balance ?? wallet.balance);
+      const updatedWallet = {
+        ...(state.wallet || {}),
+        user_id: state.wallet?.user_id || state.auth?.userId || '',
+        balance: newBalance,
+      };
+      setWalletData({ wallet: updatedWallet, txns: state.walletTxns || [] });
+      alert('Bet placed!');
+      try { window.dispatchEvent(new CustomEvent('wallet:updated')); } catch {}
+      onNavigate('dashboard');
+    } catch (e) {
+      console.error('[confirm] bet error', e);
+      const msg = e?.message ? String(e.message) : 'Network error while placing bet.';
+      setError(msg);
+      alert(msg);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -1036,8 +1264,11 @@ export function ConfirmScreen({ onNavigate, params, debug = false }) {
           {canPlace ? 'Ready to place bet.' : 'Insufficient balance or invalid amount.'}
         </div>
       </div>
-      <button onClick={onPlace} disabled={!canPlace}>Place Bet</button>
+      <button onClick={onPlace} disabled={!canPlace || submitting}>{submitting ? 'Placing…' : 'Place Bet'}</button>
       <button onClick={() => onNavigate('join')}>Back</button>
+      {error && (
+        <div style={{ marginTop: 8, color: '#b42318', fontSize: 13 }}>{error}</div>
+      )}
     </ScreenFrame>
   );
 }
@@ -1063,19 +1294,20 @@ export function DepositScreen({ onNavigate, debug = false }) {
       return;
     }
     try {
+      const trimmedNote = safeTrim(note);
+      const payload = {
+        action: 'deposit',
+        amount: normalizedAmount,
+        method: 'bank',
+      };
+      if (trimmedNote) payload.note = trimmedNote;
       const res = await fetch('/api/wallet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'tma ' + initData,
         },
-        body: JSON.stringify({
-          action: 'deposit',
-          amount: normalizedAmount,
-          method: 'bank',
-          ref: note || 'TMA',
-          slip_url: uploadSlip || undefined,
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1111,6 +1343,21 @@ export function DepositScreen({ onNavigate, debug = false }) {
       coerceNumber: true,
       onChange: setAmount,
       placeholder: 'Amount',
+      inputStyle: {
+        textAlign: 'left',
+        padding: '0 16px',
+        fontWeight: 500,
+        cursor: 'pointer',
+        background: 'rgba(255,255,255,0)',       // transparent background
+        backgroundColor: 'rgba(255,255,255,0)',
+        outline: '1px solid rgba(255,255,255,0)',// invisible outline
+        border: '0',
+        boxShadow: 'none',
+        filter: 'none',
+        WebkitBackdropFilter: 'none',
+        backdropFilter: 'none',
+        caretColor: 'transparent',
+      },
     },
     {
       key: 'noteInput',
@@ -1124,23 +1371,73 @@ export function DepositScreen({ onNavigate, debug = false }) {
       inputType: 'text',
       coerceNumber: false,
       placeholder: 'Note for admin (optional)',
-      inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
+      inputStyle: {
+        textAlign: 'left',
+        padding: '0 16px',
+        fontWeight: 500,
+        cursor: 'pointer',
+        background: 'rgba(255,255,255,0)',       // transparent background
+        backgroundColor: 'rgba(255,255,255,0)',
+        outline: '1px solid rgba(255,255,255,0)',// invisible outline
+        border: '0',
+        boxShadow: 'none',
+        filter: 'none',
+        WebkitBackdropFilter: 'none',
+        backdropFilter: 'none',
+        caretColor: 'transparent',
+      },
       onChange: setNote,
     },
     {
       key: 'uploadSlipInput',
       kind: 'input',
-      title: 'Upload slip link',
+      title: 'Attach Slip (Upload File)',
       left: '4.24%',
       top: '42.38%',
       width: '91.52%',
       height: '6.42%',
-      value: uploadSlip,
-      inputType: 'text',
+      // show plain text value; no native file UI
+      value: uploadSlip ? `Slip: ${uploadSlip}` : 'Tap to attach payment slip (jpg/png/pdf)',
+      inputType: 'text',          // force text so browser doesn't render file control
+      readOnly: true,             // prevent caret/keyboard
+      tabIndex: -1,               // skip focus
       coerceNumber: false,
-      placeholder: 'Attach proof of payment URL',
-      inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
-      onChange: setUploadSlip,
+      placeholder: '',
+      inputStyle: {
+        textAlign: 'left',
+        padding: '0 16px',
+        fontWeight: 500,
+        cursor: 'pointer',
+        background: 'rgba(255,255,255,0)',       // transparent background
+        backgroundColor: 'rgba(255,255,255,0)',
+        outline: '1px solid rgba(255,255,255,0)',// invisible outline
+        border: '0',
+        boxShadow: 'none',
+        filter: 'none',
+        WebkitBackdropFilter: 'none',
+        backdropFilter: 'none',
+        caretColor: 'transparent',
+      },
+      onFocus: (e) => e.target.blur(), // kill focus ring on some browsers
+      onClick: () => {
+        // create file input element within real user gesture
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*,.pdf';
+        input.style.display = 'none';
+        document.body.appendChild(input);
+
+        input.addEventListener('change', (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (file) {
+            setUploadSlip(file.name);
+          }
+          document.body.removeChild(input);
+        });
+
+        // must call directly within same click gesture
+        input.click();
+      },
     },
     {
       key: 'submitDeposit',
@@ -1170,7 +1467,6 @@ export function DepositScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit((v) => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
@@ -1189,17 +1485,37 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       const bankLabel = entry.label || entry.bankLabel || entry.bank || entry.wallet || 'Saved destination';
       const accountNumber = entry.accountNumber || entry.number || entry.id || '';
       const accountHolder = entry.accountHolder || entry.accountName || entry.name || auth.accountName || auth.name || '';
+      const method = (entry.method || entry.type || 'bank').toLowerCase();
       const labelParts = [bankLabel, accountNumber ? `• ${accountNumber}` : null].filter(Boolean);
+      const destinationDisplay = entry.destination || labelParts.filter(Boolean).join(' ') || bankLabel;
       return {
         id: entry.id || entry.value || accountNumber || `withdraw-destination-${index}`,
         label: labelParts.length > 0 ? labelParts.join(' ') : 'Saved destination',
         bank: bankLabel,
         accountNumber,
         accountHolder,
+        method,
+        destination: destinationDisplay,
       };
     });
 
     if (mapped.length > 0) return mapped;
+
+    if (auth.withdrawDest || auth.withdrawHolder || auth.withdrawMethod) {
+      const method = (auth.withdrawMethod || auth.withdraw_method || 'bank').toLowerCase();
+      const destString = auth.withdrawDest || '';
+      const parts = destString.split(':');
+      const accNum = parts.length > 1 ? parts.slice(1).join(':').trim() : destString;
+      return [{
+        id: 'primary-withdraw-destination',
+        label: destString || `${method} • ${accNum}`,
+        bank: method,
+        accountNumber: accNum,
+        accountHolder: auth.withdrawHolder || auth.accountName || auth.name || '',
+        method,
+        destination: destString || `${method} ${accNum}`.trim(),
+      }];
+    }
 
     if (auth.bank || auth.accountNumber || auth.accountName || auth.name) {
       const bankLabel = auth.bankLabel || auth.bank || 'Primary destination';
@@ -1212,6 +1528,8 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
         bank: bankLabel,
         accountNumber,
         accountHolder,
+        method: 'bank',
+        destination: labelParts.length > 0 ? labelParts.join(' ') : bankLabel,
       }];
     }
 
@@ -1238,6 +1556,10 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       alert('Enter a withdraw amount greater than zero.');
       return;
     }
+    if (normalizedAmount < 10) {
+      alert('Minimum withdrawal is 10 points.');
+      return;
+    }
     if (normalizedAmount > balance) {
       alert('Enter an amount within your available balance.');
       return;
@@ -1252,18 +1574,21 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       return;
     }
     try {
+      const payload = {
+        action: 'withdraw',
+        amount: normalizedAmount,
+        method: (activeDestination.method || 'bank').toLowerCase(),
+        // Compose destination using WithdrawSetupScreen stored values
+        destination: `${activeDestination.bank || auth.withdrawMethod || 'bank'}:${activeDestination.accountNumber || auth.withdrawDest || ''}`.trim(),
+        account_holder: activeDestination.accountHolder || accountHolderName || auth.withdrawHolder || auth.name || '',
+      };
       const res = await fetch('/api/wallet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'tma ' + initData,
         },
-        body: JSON.stringify({
-          action: 'withdraw',
-          amount: normalizedAmount,
-          destination: `${activeDestination.bank || 'bank'}:${activeDestination.accountNumber || ''}`.trim(),
-          accountHolder: activeDestination.accountHolder || '',
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1357,7 +1682,6 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit((v) => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
@@ -1365,54 +1689,249 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
 
 export function HistoryScreen({ onNavigate, debug = false }) {
   const { state } = useAppState();
-  const bets = state.bets;
-  const txns = state.walletTxns;
   const [edit, setEdit] = useState(false);
-  const hotspots = [
-    {
-      key: 'historyLedger',
-      title: 'Points transaction history',
-      ariaLabel: 'Points transaction history',
-      left: '3.76%',
-      top: '13.63%',
-      width: '92.18%',
-      height: '40.59%',
-      onClick: () => {/* no navigation */},
-    },
-  ];
-  const showOverlay = edit;
-  useHotspotDebug('history', debug, hotspots);
+  // TAG: history-live-01
+  const [rows, setRows] = useState([]);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [limit, setLimit] = useState(50);
+  const [offset, setOffset] = useState(0);
 
+  const init = getInitData && getInitData();
+
+  const loadTxns = useCallback(async () => {
+    if (!init) return;
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch(`/api/data-balance?limit=${limit}&offset=${offset}`, {
+      headers: { Authorization: 'tma ' + init },
+      });
+      const j = await r.json().catch(() => ({}));
+      const txns = Array.isArray(j?.txns)
+        ? j.txns
+        : Array.isArray(j?.transactions)
+          ? j.transactions
+          : [];
+      setRows(txns);
+    } catch (e) {
+      setErr(String(e?.message || e));
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [init, limit, offset]);
+
+useEffect(() => {
+  function onWalletUpdated() {
+    // slight debounce so backend finishes writes
+    setTimeout(() => loadTxns(), 120);
+  }
+  window.addEventListener('wallet:updated', onWalletUpdated);
+  return () => window.removeEventListener('wallet:updated', onWalletUpdated);
+}, [loadTxns]);
+
+  // Normalize inputs: server txns (rows) + any in-memory txns/bets as fallback
+  const serverTxns = rows;
+  const fallbackTxns = Array.isArray(state?.walletTxns) ? state.walletTxns : [];
+  const txns = serverTxns.length ? serverTxns : fallbackTxns;
+  const bets = Array.isArray(state?.bets) ? state.bets : [];
+
+  // --- Render rows inside PNG layout (ledger box) ---
+  // Build a unified, null-safe history list first
+  const maxDisplayRows = 10;
+
+  // Guard against undefined arrays (txns/bets now defined above)
+  const safeTxns = Array.isArray(txns) ? txns : [];
+  const safeBets = Array.isArray(bets) ? bets : [];
+
+  // Recompute historyRows with full null-safety (map only on arrays)
   const historyRows = useMemo(() => {
-    const mappedTxns = txns.map((t) => {
-      const typeLower = (t.note || '').toLowerCase();
+    // Using shared formatters from src/lib/formatters.mjs
+
+    // Map server txns → table rows
+    const mappedTxns = safeTxns.map((t) => {
+      const note = typeof t?.note === 'string' ? t.note : '';
+      const typeLower = note.toLowerCase();
+      const isBetTxn = (t?.type === 'bet') || note.startsWith('bet:');
+
+      // Try to extract group/figure from various note patterns
+      let group = t?.group_code || t?.group || '';
+      let figure = t?.figure || '';
+
+      if (isBetTxn) {
+        const mHash = note.match(/\b([ABCD])#(\d{1,2})\b/i);
+        if (mHash) { group = group || mHash[1]; figure = figure || mHash[2]; }
+
+        const mG = note.match(/\bgroup\s*=\s*([ABCD])\b/i);
+        const mF = note.match(/\bfigure\s*=\s*(\d{1,2})\b/i);
+        if (mG) group = group || mG[1];
+        if (mF) figure = figure || mF[1];
+
+        const mComma = note.match(/\bbet\s*:\s*([ABCD])\s*,\s*(\d{1,2})\b/i);
+        if (mComma) { group = group || mComma[1]; figure = figure || mComma[2]; }
+
+        const mCompact = note.match(/\b([ABCD])\s*([1-9][0-9]?)\b/i);
+        if (mCompact) { group = group || mCompact[1]; figure = figure || mCompact[2]; }
+      }
+
+      const g = formatGroup(group);
+      const f = formatFigure(figure);
+      const figureLabel = formatGroupFigure(g, f) || (t?.figure != null ? String(t.figure) : '-');
+
+      // Transaction label
       let label = 'Transaction';
-      if (t.type === 'bet') label = 'Bet';
-      else if (t.type === 'credit') label = typeLower.includes('win') ? 'Win' : 'Deposit';
-      else if (t.type === 'debit') label = 'Withdraw';
-      const rawAmount = Number(t.amount) || 0;
-      const isNegative = t.type === 'debit' || t.type === 'bet';
+      if (isBetTxn || t?.type === 'bet') label = 'Bet';
+      else if ((t?.type || '').toLowerCase() === 'credit' || typeLower.includes('deposit')) label = 'Deposit';
+      else if ((t?.type || '').toLowerCase() === 'debit' || typeLower.includes('withdraw')) label = 'Withdraw';
+
+      const rawAmount = Number(t?.amount) || 0;
+      const isNegative = isBetTxn || (t?.type === 'debit');
       const signedAmount = isNegative ? -Math.abs(rawAmount) : Math.abs(rawAmount);
+      const timestamp = t?.createdAt || t?.created_at || t?.timestamp || new Date().toISOString();
+
       return {
-        id: `txn-${t.id}`,
-        timestamp: t.createdAt,
+        id: `txn-${t?.id ?? `${signedAmount}-${Math.random().toString(36).slice(2)}`}`,
+        timestamp,
         transaction: label,
-        figure: '-',
+        figure: figureLabel,
         points: signedAmount,
       };
     });
 
-    const mappedBets = bets.map((b) => ({
-      id: `bet-${b.id}`,
-      timestamp: b.createdAt,
-      transaction: 'Bet',
-      figure: b.figure != null ? String(b.figure) : '-',
-      points: -Math.abs(b.points),
-    }));
+    // Map in-memory bets → table rows
+    const mappedBets = safeBets.map((b) => {
+      const g0 = b?.group_code || b?.group || '';
+      const f0 = b?.figure;
+      const gg = formatGroup(g0);
+      const ff = formatFigure(f0);
+      const figureLabel = (gg && ff) ? formatGroupFigure(gg, ff) : (b?.figure != null ? String(b.figure) : '-');
 
-    return [...mappedTxns, ...mappedBets]
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [txns, bets]);
+      return {
+        id: `bet-${b?.id ?? `${b?.figure}-${Math.random().toString(36).slice(2)}`}`,
+        timestamp: b?.createdAt || b?.created_at || b?.timestamp || new Date().toISOString(),
+        transaction: 'Bet',
+        figure: figureLabel,
+        points: -Math.abs(b?.points ?? b?.amount ?? 0),
+      };
+    });
+
+    // Combine and sort by newest first
+    return [...mappedTxns, ...mappedBets].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [safeTxns, safeBets]);
+
+  // Now safely slice visible rows (previous bug: referenced historyRows before it was defined)
+  const visibleRows = useMemo(() => historyRows.slice(0, maxDisplayRows), [historyRows]);
+
+  // Ledger area from the PNG (absolute coords used across the file)
+  const LEDGER_TOP_START = 16.50;   // first row top %
+  const LEDGER_ROW_GAP   = 4.00;    // percent gap between rows
+  const LEDGER_ROW_H     = 3.10;    // row height %
+
+  // Column positions inside the ledger area, tuned to the PNG
+  const COLS = {
+    date:       { left:  6.50, width: 26.00 },
+    txn:        { left: 54.00, width: 25.00 },
+    figure:     { left: 73.50, width: 24.50 },
+    points:     { left: 82.50, width: 24.50 },
+  };
+
+  // Build read-only input hotspots per row/column
+  const rowHotspots = visibleRows.flatMap((row, idx) => {
+    const top = (LEDGER_TOP_START + LEDGER_ROW_GAP * idx).toFixed(2) + '%';
+    const baseStyle = {
+      background: '#fff',
+      opacity: 1,
+      filter: 'none',
+      WebkitBackdropFilter: 'none',
+      border: '0',
+      boxShadow: 'none',
+      color: '#111827',
+      padding: 0,
+    };
+    const dateVal   = row?.timestamp ? new Date(row.timestamp).toLocaleString() : '';
+    const txnVal    = row?.transaction ?? '';
+    const figVal    = row?.figure ?? '';
+    const ptsRaw    = Number(row?.points ?? 0);
+    const ptsPrefix = ptsRaw >= 0 ? '+' : '';
+    const ptsVal    = `${ptsPrefix}${Number(ptsRaw).toLocaleString()}`;
+
+    return [
+      {
+        key: `hist_date_${idx}`,
+        kind: 'input',
+        title: 'Date & Time',
+        left: `${COLS.date.left}%`,
+        top,
+        width: `${COLS.date.width}%`,
+        height: `${LEDGER_ROW_H}%`,
+        value: dateVal,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { ...baseStyle, color: '#111827', textAlign: 'left' },
+      },
+      {
+        key: `hist_txn_${idx}`,
+        kind: 'input',
+        title: 'Transaction',
+        left: `${COLS.txn.left}%`,
+        top,
+        width: `${COLS.txn.width}%`,
+        height: `${LEDGER_ROW_H}%`,
+        value: txnVal,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { ...baseStyle, color: '#374151', textAlign: 'left', fontWeight: 600 },
+      },
+      {
+        key: `hist_fig_${idx}`,
+        kind: 'input',
+        title: 'Figure',
+        left: `${COLS.figure.left}%`,
+        top,
+        width: `${COLS.figure.width}%`,
+        height: `${LEDGER_ROW_H}%`,
+        value: figVal,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { ...baseStyle, color: '#374151', textAlign: 'center', fontWeight: 600 },
+      },
+      {
+        key: `hist_pts_${idx}`,
+        kind: 'input',
+        title: 'Points',
+        left: `${COLS.points.left}%`,
+        top,
+        width: `${COLS.points.width}%`,
+        height: `${LEDGER_ROW_H}%`,
+        value: ptsVal,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { ...baseStyle, color: ptsRaw >= 0 ? '#1a7f37' : '#b42318', textAlign: 'right', fontWeight: 700 },
+      },
+    ];
+  });
+
+  const hotspots = [
+    {
+      key: 'historyLedger',
+      title: 'Points transaction history',
+      left: '3.76%',
+      top: '13.63%',
+      width: '92.18%',
+      height: '40.59%',
+      onClick: () => {/* non-nav hitbox */},
+    },
+    ...rowHotspots,
+  ];
+
+  const showOverlay = edit;
+  useHotspotDebug('history', debug, hotspots);
 
   return (
     <div style={{ padding: 12 }}>
@@ -1426,9 +1945,14 @@ export function HistoryScreen({ onNavigate, debug = false }) {
         onBack={() => onNavigate('dashboard')}
         onDraft={(d) => console.log('History hotspot draft:', d)}
       />
+
       <div style={{ width: '100%', marginTop: 16 }}>
-        <h3 style={{ margin: '8px 0' }}>Points History</h3>
-        {historyRows.length === 0 ? (
+        <h3 style={{ margin: '8px 0' }}>
+          Points History <span style={{ fontSize: 12, opacity: 0.6 }}>v: history-05</span>
+        </h3>
+        {loading && <div style={{ padding: 8, color: '#1f3a5f' }}>Loading…</div>}
+        {err && <div style={{ padding: 8, color: '#b42318' }}>{err}</div>}
+        {(!loading && !err && historyRows.length === 0) ? (
           <div style={{ padding: 8, color: '#666' }}>No history yet.</div>
         ) : (
           <div style={{ width: '100%', overflowX: 'auto' }}>
@@ -1458,136 +1982,333 @@ export function HistoryScreen({ onNavigate, debug = false }) {
         )}
       </div>
 
-      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={() => setEdit((v) => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={() => loadTxns()} disabled={loading}>Refresh</button>
+        <button onClick={() => setOffset((o) => Math.max(0, o - limit))} disabled={offset === 0 || loading}>Prev</button>
+        <button onClick={() => setOffset((o) => o + limit)} disabled={loading}>Next</button>
       </div>
     </div>
   );
 }
-
 export function WithdrawSetupScreen({ onNavigate, debug = false }) {
-  const { state } = useAppState();
-  const auth = state?.auth || {};
-  const [edit, setEdit] = useState(false);
-  const [selectedBank, setSelectedBank] = useState(auth.bank || '');
-  const [accountNumber, setAccountNumber] = useState(auth.accountNumber || '');
-  const [accountHolder, setAccountHolder] = useState(auth.accountName || auth.name || '');
+    const { state, setAuth } = useAppState();
+    const auth = state?.auth || {};
+    const [edit, setEdit] = useState(false);
+    const initialMethod = (auth.withdrawMethod || auth.withdraw_method || auth.bank || 'bank').toLowerCase();
+    const initialAccount = (() => {
+      if (auth.withdrawDest) {
+        const parts = String(auth.withdrawDest).split(':');
+        return parts.length > 1 ? parts.slice(1).join(':').trim() : auth.withdrawDest;
+      }
+      return auth.accountNumber || '';
+    })();
+    const [selectedBank, setSelectedBank] = useState(initialMethod);
+    const [accountNumber, setAccountNumber] = useState(initialAccount);
+    const [accountHolder, setAccountHolder] = useState(auth.withdrawHolder || auth.accountName || auth.name || '');
+    const [saving, setSaving] = useState(false);
+    const [saveStatus, setSaveStatus] = useState('');
+    const [saveError, setSaveError] = useState('');
 
-  useEffect(() => {
-    if (auth.bank) setSelectedBank(auth.bank);
-    if (auth.accountNumber) setAccountNumber(auth.accountNumber);
-    if (auth.accountName) setAccountHolder(auth.accountName);
-  }, [auth.bank, auth.accountNumber, auth.accountName]);
+    useEffect(() => {
+      const nextMethod = (auth.withdrawMethod || auth.withdraw_method || auth.bank || 'bank').toLowerCase();
+      setSelectedBank(nextMethod);
+      if (auth.withdrawDest) {
+        const parts = String(auth.withdrawDest).split(':');
+        setAccountNumber(parts.length > 1 ? parts.slice(1).join(':').trim() : auth.withdrawDest);
+      } else if (auth.accountNumber) {
+        setAccountNumber(auth.accountNumber);
+      }
+      if (auth.withdrawHolder || auth.accountName || auth.name) {
+        setAccountHolder(auth.withdrawHolder || auth.accountName || auth.name || '');
+      }
+    }, [auth.withdrawDest, auth.withdrawHolder, auth.withdrawMethod, auth.accountNumber, auth.accountName, auth.bank, auth.name]);
 
-  const userName = auth.name || auth.fullName || 'User Name';
-  const userId = auth.userId || auth.telegramId || auth.id || 'Unknown ID';
-  const summaryDisplay = `${userName} · ID ${userId}`;
+    const userName = auth.name || auth.fullName || 'User Name';
+    const userId = auth.userId || auth.telegramId || auth.id || 'Unknown ID';
+    const summaryDisplay = `${userName} · ID ${userId}`;
 
-  const bankOptions = auth.availableBanks || [
-    { label: 'Maybank', value: 'maybank' },
-    { label: 'CIMB', value: 'cimb' },
-    { label: 'Public Bank', value: 'public-bank' },
-    { label: 'Touch n Go eWallet', value: 'tng' },
-    { label: 'GrabPay', value: 'grabpay' },
-  ];
+    const bankOptions = auth.availableBanks || [
+      { label: 'Maybank', value: 'maybank' },
+      { label: 'CIMB', value: 'cimb' },
+      { label: 'Public Bank', value: 'public-bank' },
+      { label: 'Touch n Go eWallet', value: 'ewallet' },
+      { label: 'Agent / GrabPay', value: 'agent' },
+    ];
 
-  const handleSaveInfo = () => {
-    const payload = {
-      bank: selectedBank,
-      accountNumber,
-      accountHolder,
+    const handleSaveInfo = async () => {
+      const method = selectedBank || 'bank';
+      const trimmedAccount = accountNumber.trim();
+      const trimmedHolder = accountHolder.trim();
+      if (!method) {
+        alert('Select a bank or e-wallet option.');
+        return;
+      }
+      if (!trimmedAccount) {
+        alert('Enter an account / wallet number.');
+        return;
+      }
+      if (!trimmedHolder) {
+        alert('Enter the account holder name.');
+        return;
+      }
+      const initData = getInitData();
+      if (!initData) {
+        alert('Open inside Telegram to continue (initData missing).');
+        return;
+      }
+      setSaving(true);
+      setSaveStatus('');
+      setSaveError('');
+      try {
+        const destination = `${method}:${trimmedAccount}`;
+        const res = await fetch('/api/profile', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'tma ' + initData,
+          },
+          body: JSON.stringify({
+            initData,
+            profile: {
+              withdrawMethod: method,
+              withdrawDest: destination,
+              withdrawHolder: trimmedHolder,
+            },
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.ok) {
+          const message = json?.error || json?.reason || `Failed to save withdraw info (${res.status})`;
+          setSaveError(message);
+          alert(message);
+          return;
+        }
+        const profile = json.profile || {};
+        setSaveStatus('Withdraw info saved.');
+        setAuth({
+          withdrawMethod: profile.withdraw_method || method,
+          withdrawDest: profile.withdraw_dest || destination,
+          withdrawHolder: profile.withdraw_holder || trimmedHolder,
+          profile: { ...(auth.profile || {}), ...profile },
+        });
+        try {
+          localStorage.setItem('LD_profile', JSON.stringify(profile));
+        } catch {}
+        alert('Withdraw info saved.');
+      } catch (error) {
+        console.error('withdraw-info-save', error);
+        const message = error?.message ? String(error.message) : 'Failed to save withdraw info.';
+        setSaveError(message);
+        alert(message);
+      } finally {
+        setSaving(false);
+      }
     };
-    console.log('Save withdraw info (placeholder)', payload);
-    alert('Withdraw info saved (placeholder). Connect to backend to persist.');
-  };
 
-  const hotspots = [
-    {
-      key: 'userSummary',
-      kind: 'input',
-      title: 'User summary',
-      left: '4.00%',
-      top: '9.00%',
-      width: '91.00%',
-      height: '10.00%',
-      value: summaryDisplay,
-      readOnly: true,
-      inputType: 'text',
-      inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
-    },
-    {
-      key: 'bankSelect',
-      kind: 'select',
-      title: 'Bank/e-Wallet',
-      left: '4.00%',
-      top: '22.00%',
-      width: '92.00%',
-      height: '6.00%',
-      value: selectedBank,
-      placeholder: 'Select Bank / e-Wallet',
-      options: bankOptions,
-      onChange: setSelectedBank,
-    },
-    {
-      key: 'accountNumber',
-      kind: 'input',
-      title: 'Account Number',
-      left: '4.00%',
-      top: '30.00%',
-      width: '91.00%',
-      height: '5.00%',
-      value: accountNumber,
-      placeholder: 'example : 01111624835',
-      inputType: 'text',
-      inputMode: 'numeric',
-      inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
-      onChange: setAccountNumber,
-    },
-    {
-      key: 'accountHolder',
-      kind: 'input',
-      title: 'Account Holder Name',
-      left: '4.00%',
-      top: '39.00%',
-      width: '92.00%',
-      height: '6.00%',
-      value: accountHolder,
-      placeholder: 'example: Abu Bin Mohd',
-      inputType: 'text',
-      inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
-      onChange: setAccountHolder,
-    },
-    {
-      key: 'submitWithdraw',
-      title: 'Save Bank / Wallet Info',
-      left: '4.00%',
-      top: '49.00%',
-      width: '92.00%',
-      height: '5.00%',
-      onClick: handleSaveInfo,
-    },
-  ];
-  const showOverlay = edit;
-  useHotspotDebug('withdraw', debug, hotspots);
-  return (
-    <div style={{ padding: 12 }}>
-      <HotspotImage
-        src={PngWithdraw}
-        alt="Withdraw Setup"
-        hotspots={hotspots}
-        editable={edit}
-        showOverlay={showOverlay}
-        interactionsEnabled={!edit}
-        onBack={() => onNavigate('dashboard')}
-        onDraft={(d) => console.log('Withdraw hotspot draft:', d)}
-      />
-      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-        <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+    const handleSaveNewDestination = async () => {
+      const method = (selectedBank || 'bank').toLowerCase();
+      const trimmedAccount = accountNumber.trim();
+      const trimmedHolder = accountHolder.trim();
+      if (!method) {
+        alert('Select a bank or e-wallet option.');
+        return;
+      }
+      if (!trimmedAccount) {
+        alert('Enter an account / wallet number.');
+        return;
+      }
+      if (!trimmedHolder) {
+        alert('Enter the account holder name.');
+        return;
+      }
+      const initData = getInitData();
+      if (!initData) {
+        alert('Open inside Telegram to continue (initData missing).');
+        return;
+      }
+      setSaving(true);
+      setSaveStatus('');
+      setSaveError('');
+      try {
+        // Derive a human label from options, fallback to method
+        const bankOpt = (bankOptions || []).find((o) => o.value === method || o.value === selectedBank || o.label?.toLowerCase() === method);
+        const bankLabel = bankOpt?.label || method;
+
+        // Compose a new destination entry
+        const newEntry = {
+          id: `dest-${Date.now()}`,
+          method,
+          bank: bankLabel,
+          bankLabel,
+          accountNumber: trimmedAccount,
+          accountHolder: trimmedHolder,
+          destination: `${method}:${trimmedAccount}`,
+        };
+
+        // Append to existing withdrawAccounts (client-side)
+        const existing = Array.isArray(auth.withdrawAccounts) ? auth.withdrawAccounts : [];
+        const nextAccounts = [...existing, newEntry];
+
+        // Persist to backend (compatible with older server: single fields + optional array)
+        const payload = {
+          initData,
+          profile: {
+            withdrawMethod: method,
+            withdrawDest: newEntry.destination,
+            withdrawHolder: trimmedHolder,
+            withdrawAccounts: nextAccounts,
+          },
+        };
+
+        const res = await fetch('/api/profile', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'tma ' + initData,
+          },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.ok) {
+          const message = json?.error || json?.reason || `Failed to save new destination (${res.status})`;
+          setSaveError(message);
+          alert(message);
+          return;
+        }
+
+        const profile = json.profile || {};
+        // Update client auth state with new array while keeping single-field compatibility
+        setAuth({
+          ...auth,
+          withdrawMethod: profile.withdraw_method || method,
+          withdrawDest: profile.withdraw_dest || newEntry.destination,
+          withdrawHolder: profile.withdraw_holder || trimmedHolder,
+          withdrawAccounts: Array.isArray(profile.withdraw_accounts) ? profile.withdraw_accounts : nextAccounts,
+          profile: { ...(auth.profile || {}), ...profile },
+        });
+
+        try {
+          const cached = {
+            ...(profile || {}),
+            withdraw_accounts: Array.isArray(profile.withdraw_accounts) ? profile.withdraw_accounts : nextAccounts,
+          };
+          localStorage.setItem('LD_profile', JSON.stringify(cached));
+        } catch {}
+
+        setSaveStatus('New withdrawal destination saved.');
+        alert('New withdrawal destination saved.');
+      } catch (error) {
+        console.error('withdraw-new-destination-save', error);
+        const message = error?.message ? String(error.message) : 'Failed to save new destination.';
+        setSaveError(message);
+        alert(message);
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const hotspots = [
+      {
+        key: 'userSummary',
+        kind: 'input',
+        title: 'User summary',
+        left: '4.00%',
+        top: '9.00%',
+        width: '91.00%',
+        height: '10.00%',
+        value: summaryDisplay,
+        readOnly: true,
+        inputType: 'text',
+        inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
+      },
+      {
+        key: 'bankSelect',
+        kind: 'select',
+        title: 'Bank/e-Wallet',
+        left: '4.00%',
+        top: '22.00%',
+        width: '92.00%',
+        height: '6.00%',
+        value: selectedBank,
+        placeholder: 'Select Bank / e-Wallet',
+        options: bankOptions,
+        onChange: setSelectedBank,
+      },
+      {
+        key: 'accountNumber',
+        kind: 'input',
+        title: 'Account Number',
+        left: '4.00%',
+        top: '30.00%',
+        width: '91.00%',
+        height: '5.00%',
+        value: accountNumber,
+        placeholder: 'example : 01111624835',
+        inputType: 'text',
+        inputMode: 'numeric',
+        inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
+        onChange: setAccountNumber,
+      },
+      {
+        key: 'accountHolder',
+        kind: 'input',
+        title: 'Account Holder Name',
+        left: '4.00%',
+        top: '39.00%',
+        width: '92.00%',
+        height: '6.00%',
+        value: accountHolder,
+        placeholder: 'example: Abu Bin Mohd',
+        inputType: 'text',
+        inputStyle: { textAlign: 'left', padding: '0 16px', fontWeight: 500 },
+        onChange: setAccountHolder,
+      },
+      {
+        key: 'submitWithdraw',
+        title: saving ? 'Saving…' : 'Save Bank / Wallet Info',
+        left: '4.00%',
+        top: '49.00%',
+        width: '92.00%',
+        height: '5.00%',
+        onClick: handleSaveInfo,
+      },
+      {
+        key: 'saveNewDestination',
+        title: saving ? 'Saving…' : 'Save as New Destination',
+        left: '4.00%',
+        top: '55.00%',
+        width: '92.00%',
+        height: '5.00%',
+        onClick: handleSaveNewDestination,
+      },
+    ];
+    const showOverlay = edit;
+    useHotspotDebug('withdraw', debug, hotspots);
+    return (
+      <div style={{ padding: 12 }}>
+        <HotspotImage
+          src={PngWithdraw}
+          alt="Withdraw Setup"
+          hotspots={hotspots}
+          editable={edit}
+          showOverlay={showOverlay}
+          interactionsEnabled={!edit}
+          onBack={() => onNavigate('dashboard')}
+          onDraft={(d) => console.log('Withdraw hotspot draft:', d)}
+        />
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          <button onClick={() => onNavigate('dashboard')}>Back</button>
+        </div>
+        {saveStatus && (
+          <div style={{ marginTop: 8, fontSize: 13, color: '#1a7f37' }}>{saveStatus}</div>
+        )}
+        {saveError && (
+          <div style={{ marginTop: 8, fontSize: 13, color: '#b42318' }}>{saveError}</div>
+        )}
       </div>
-    </div>
-  );
+    );
 }
 
 export function InviteScreen({ onNavigate, debug = false }) {
@@ -1639,7 +2360,6 @@ export function InviteScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
@@ -1700,25 +2420,71 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
   // Always call hook in a non-conditional position with a stable array
   useHotspotDebug('admin-dashboard', debug, []);
 
+  // --- NEW: server-backed metrics state ---
+  const [serverUsers, setServerUsers] = useState(null);
+  const [serverPoints, setServerPoints] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsErr, setMetricsErr] = useState('');
+
+  // Fetch live totals from backend (Supabase via /api/admin-metrics)
+  useEffect(() => {
+    const init = getInitData && getInitData();
+    if (!init || !isAdmin) return;
+    let abort = false;
+    (async () => {
+      try {
+        setMetricsLoading(true); setMetricsErr('');
+        const r = await fetch('/api/admin-metrics', {
+          headers: { 'Authorization': 'tma ' + init }
+        });
+        const j = await r.json().catch(() => ({}));
+        if (abort) return;
+        if (!r.ok) {
+          setMetricsErr(String(j?.error || j?.reason || `metrics status ${r.status}`));
+          setServerUsers(null); setServerPoints(null);
+        } else {
+          // Be flexible with field names from the API
+          const su = j?.users_count ?? j?.users ?? j?.total_users;
+          const sp = j?.total_points ?? j?.total_balance ?? j?.points_sum;
+          setServerUsers(Number(su));
+          setServerPoints(Number(sp));
+        }
+      } catch (e) {
+        if (!abort) { setMetricsErr(String(e?.message || e)); }
+      } finally {
+        if (!abort) setMetricsLoading(false);
+      }
+    })();
+    return () => { abort = true; };
+  }, [isAdmin]);
+
   if (!isAdmin) {
     return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
   }
 
-  const totalUsers = Array.isArray(state?.users) ? state.users.length : 0;
-  const totalPoints = Array.isArray(state?.wallets)
+  // Fallback to in-memory state if server values are missing
+  const stateUsersCount = Array.isArray(state?.users) ? state.users.length : 0;
+  const statePointsSum = Array.isArray(state?.wallets)
     ? state.wallets.reduce((sum, w) => sum + (Number(w?.balance) || 0), 0)
     : 0;
+
+  const totalUsers = Number.isFinite(serverUsers) ? serverUsers : stateUsersCount;
+  const totalPoints = Number.isFinite(serverPoints) ? serverPoints : statePointsSum;
+
+  // Small visible version tag + console marker
+  const versionTag = 'admin-dash-v: metrics-01';
+  try { console.log('TAG:', versionTag, { totalUsers, totalPoints, metricsLoading, metricsErr }); } catch {}
 
   const hotspots = [
     // Totals display bar (non-nav; shows computed values)
     {
       key: 'totals',
-      title: `Total Users: ${totalUsers}, Total Points: ${totalPoints.toLocaleString()}`,
+      title: `Total Users: ${totalUsers} • Total Points: ${Number(totalPoints).toLocaleString()}${metricsLoading ? ' (syncing…) ' : ''} — ${versionTag}`,
       left: '4.37%',
       top: '8.53%',
       width: '91.00%',
       height: '9.34%',
-      onClick: () => alert(`Users: ${totalUsers}, Points: ${totalPoints.toLocaleString()}`),
+      onClick: () => alert(`Users: ${totalUsers}\nPoints: ${Number(totalPoints).toLocaleString()}${metricsErr ? `\nNote: ${metricsErr}` : ''}`),
     },
 
     // Vertical list (exact coordinates provided)
@@ -1726,7 +2492,7 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
     { key: 'points', title: 'Points', left: '4.00%', top: '27.00%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminPoints') },
     { key: 'figures', title: 'Figures', left: '4.00%', top: '33.66%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminFigures') },
     { key: 'results', title: 'Results Posting', left: '4.00%', top: '40.31%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
-    { key: 'reports', title: 'Reports', left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
+    { key: 'reports', title: 'Reports', left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminReports') },
   ];
   const showOverlay = edit;
   return (
@@ -1743,90 +2509,351 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
       />
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('dashboard')}>Back</button>
-        <button onClick={() => onNavigate('adminUsers')}>Users</button>
-        <button onClick={() => onNavigate('adminPoints')}>Points</button>
-        <button onClick={() => onNavigate('adminFigures')}>Figures</button>
-        <button onClick={() => onNavigate('adminResults')}>Results Posting</button>
-        <button onClick={() => onNavigate('adminResults')}>Reports</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <span style={{ fontSize: 12, opacity: 0.6 }}>v: {versionTag}</span>
       </div>
     </div>
   );
 }
 
 export function AdminUserManagementScreen({ onNavigate, debug = false }) {
-  const [edit, setEdit] = useState(false);
   const { state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
-  useHotspotDebug(
-    'admin-users',
-    debug,
-    isAdmin
-      ? [
-          {
-            key: 'placeholder',
-            title: 'placeholder',
-            left: '0%',
-            top: '0%',
-            width: '0%',
-            height: '0%',
-          },
+  const [searchText, setSearchText] = useState('');
+  const [focusedUserId, setFocusedUserId] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [colWidths, setColWidths] = useState({
+  userId: 18,
+  userName: 22,
+  contact: 18,
+  profile: 22,
+  status: 10,
+  actions: 10,
+});
+
+  // Remote users from SQL via /api/admin
+  const [remoteUsers, setRemoteUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [usersError, setUsersError] = useState('');
+
+  // Debounced fetch to backend admin users search
+  useEffect(() => {
+    let abort = false;
+    const initData = getInitData();
+    const q = (searchText || '').trim();
+    async function run() {
+      try {
+        setLoadingUsers(true); setUsersError('');
+        const res = await fetch('/api/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'tma ' + (initData || '') },
+          body: JSON.stringify({ action: 'users', query: q, limit: 25 })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (abort) return;
+        if (!res.ok || json.ok === false) {
+          setUsersError(json.error || 'Failed to load users');
+          setRemoteUsers([]);
+        } else {
+          const rows = Array.isArray(json.users) ? json.users : (Array.isArray(json.rows) ? json.rows : []);
+          setRemoteUsers(rows);
+        }
+      } catch (e) {
+        if (!abort) { setUsersError(String(e.message || e)); setRemoteUsers([]); }
+      } finally { if (!abort) setLoadingUsers(false); }
+    }
+    const t = setTimeout(run, 250);
+    return () => { abort = true; clearTimeout(t); };
+  }, [searchText]);
+
+  const users = useMemo(() => (
+    Array.isArray(remoteUsers) && remoteUsers.length ? remoteUsers : (Array.isArray(state?.users) ? state.users : [])
+  ), [remoteUsers, state?.users]);
+
+  const normalise = useCallback((value) => (value == null ? '' : String(value).toLowerCase()), []);
+
+  const filteredUsers = useMemo(() => {
+    const needle = normalise(searchText).trim();
+    let filtered = users;
+    if (needle) {
+      filtered = filtered.filter((user) => {
+        const haystack = [
+          user?.name,
+          user?.fullName,
+          user?.username,
+          user?.contact,
+          user?.phone,
+          user?.email,
+          user?.telegramId,
+          user?.id,
         ]
-      : []
+          .map(normalise)
+          .filter(Boolean);
+        return haystack.some((entry) => entry.includes(needle));
+      });
+    }
+    if (statusFilter) {
+      filtered = filtered.filter((u) => {
+        const status = String(u?.status || u?.requestStatus || u?.approvalStatus || '');
+        return status.toLowerCase().includes('request');
+      });
+    }
+    return filtered;
+  }, [users, searchText, normalise, statusFilter]);
+
+  const visibleUsers = useMemo(
+    () => filteredUsers.slice(0, 6),
+    [filteredUsers]
   );
+
+  const resolveUserId = useCallback((user, fallback) => {
+    const id =
+      user?.id ||
+      user?.userId ||
+      user?.telegramId ||
+      user?.phone ||
+      user?.email ||
+      fallback;
+    return id ? String(id) : null;
+  }, []);
+
+  const focusedUser = useMemo(() => {
+    if (!focusedUserId) {
+      return visibleUsers[0] || filteredUsers[0] || null;
+    }
+    return filteredUsers.find((user, idx) => resolveUserId(user, `idx-${idx}`) === focusedUserId) || null;
+  }, [filteredUsers, focusedUserId, resolveUserId, visibleUsers]);
+
+  useEffect(() => {
+    if (!focusedUser && filteredUsers.length > 0) {
+      const fallbackId = resolveUserId(filteredUsers[0], 'idx-0');
+      setFocusedUserId(fallbackId);
+    }
+  }, [filteredUsers, focusedUser, resolveUserId]);
+
+  const getDisplayName = useCallback((user) => {
+    return (
+      user?.name ||
+      user?.fullName ||
+      user?.username ||
+      (user?.telegramId ? `@${user.telegramId}` : null) ||
+      user?.contact ||
+      user?.phone ||
+      user?.email ||
+      resolveUserId(user, 'user') ||
+      'User'
+    );
+  }, [resolveUserId]);
+
+  const rowTopPercents = [22.73, 29.35, 35.96, 42.57, 49.29, 55.90];
+  const rowHotspots = rowTopPercents.flatMap((top, idx) => {
+    const user = visibleUsers[idx];
+    const fallbackId = `idx-${idx}`;
+    const userId = user ? resolveUserId(user, fallbackId) : fallbackId;
+    const name = user ? getDisplayName(user) : '';
+    const contact = user ? (user.contact || user.phone || user.email || '') : '';
+    return [
+      // Clickable row hitbox (for focus/select)
+      {
+        key: `rowHit_${idx + 1}`,
+        left: '4.05%', top: `${top}%`, width: '91.60%', height: '5.53%',
+        title: user ? `Inspect ${name}` : 'Empty user row',
+        ...(user ? { onClick: () => setFocusedUserId(userId) } : {}),
+      },
+      // Name (rendered as read-only input to display text inside the layout)
+      {
+        key: `rowName_${idx + 1}`,
+        kind: 'input',
+        title: 'User',
+        left: '6.50%', top: `${top + 1.1}%`, width: '46.00%', height: '3.20%',
+        value: name,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { background: '#fff', opacity: 1, filter: 'none', WebkitBackdropFilter: 'none', border: '0', boxShadow: 'none', color: '#111827', fontWeight: 600, padding: 0 }
+      },
+      // Contact (right side)
+      {
+        key: `rowContact_${idx + 1}`,
+        kind: 'input',
+        title: 'Contact',
+        left: '54.50%', top: `${top + 1.1}%`, width: '39.00%', height: '3.20%',
+        value: contact,
+        readOnly: true,
+        inputType: 'text',
+        coerceNumber: false,
+        inputStyle: { background: '#fff', opacity: 1, filter: 'none', WebkitBackdropFilter: 'none', border: '0', boxShadow: 'none', color: '#374151', textAlign: 'right', padding: 0 }
+      },
+    ];
+  });
+
+  const hotspots = useMemo(() => (
+    [
+      {
+        key: 'statusFilter',
+        kind: 'select',
+        title: 'Filter: Status',
+        left: '4.00%',
+        top: '8.00%',
+        width: '42.00%',
+        height: '4.50%',
+        value: statusFilter,
+        options: [
+          { label: 'All', value: '' },
+          { label: 'Request', value: 'request' },
+        ],
+        placeholder: 'Status: All',
+        onChange: setStatusFilter,
+      },
+      {
+        key: 'searchUser',
+        kind: 'input',
+        title: 'Search user',
+        left: '4.00%',
+        top: '13.00%',
+        width: '90.60%',
+        height: '6.08%',
+        value: searchText,
+        inputType: 'text',        // force text input (no numeric spinner)
+        inputMode: 'search',      // mobile keyboard hint
+        coerceNumber: false,      // never coerce to number
+        placeholder: 'Search by ID, username, name or contact',
+        onChange: setSearchText,
+
+        // Pure text look: remove blue border/outline/shadow/overlay
+        inputStyle: {
+          position: 'relative',
+          zIndex: 5,
+          background: 'rgba(255,255,255,0)',
+          backgroundColor: 'rgba(255,255,255,0)',
+          opacity: 1,
+          filter: 'none',
+          backdropFilter: 'none',
+          WebkitBackdropFilter: 'none',
+          border: '0',
+          outline: '1px solid rgba(255,255,255,0)',
+          boxShadow: 'none',
+          borderRadius: 10,
+          color: '#0f172a',
+          fontWeight: 600,
+          padding: '0 16px',
+        },
+
+        // Defensive: kill focus ring on some browsers
+        onFocus: (e) => e.target && e.target.blur && e.target.blur(),
+      },
+  
+      ...rowHotspots,
+    ]
+  ), [rowHotspots, searchText, statusFilter]);
+
+  useHotspotDebug('admin-users', debug && isAdmin, hotspots);
+
   if (!isAdmin) {
     return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
   }
 
-  // Search field state (Name/ID/Contact)
-  const [q, setQ] = useState('');
-
-  // Table rows rendered as hotspots beneath the search bar
-  const rowTopPercents = [22.73, 29.35, 35.96, 42.57, 49.29, 55.90];
-  const rowHotspots = rowTopPercents.map((top, idx) => ({
-    key: `row${idx + 1}`,
-    left: '4.05%',
-    top: `${top}%`,
-    width: '91.60%',
-    height: '5.53%',
-    onClick: () => console.log(`Row ${idx + 1} tapped`),
-  }));
-
-  const hotspots = [
-    // Search User (non-navigation input overlay)
-    {
-      key: 'searchUser',
-      kind: 'input',
-      title: 'Search User',
-      left: '4.00%',
-      top: '12.00%',
-      width: '90.60%',
-      height: '6.08%',
-      value: q,
-      onChange: (v) => setQ(v),
-    },
-    ...rowHotspots,
-  ];
-
-  const showOverlay = edit;
-  useHotspotDebug('admin-users', debug, hotspots);
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
         src={PngAdminUsers}
         alt="Admin: User Management"
         hotspots={hotspots}
-        editable={edit}
-        showOverlay={showOverlay}
-        interactionsEnabled={!edit}
+        editable={false}
+        showOverlay={false}
+        interactionsEnabled
         onBack={() => onNavigate('adminDashboard')}
         onDraft={(d) => console.log('AdminUsers draft:', d)}
       />
-      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+      {/* Admin Users: Inline adjustable table (v: admin-users-02) */}
+      <div style={{ marginTop: 12 }}>
+        <h3 style={{ margin: '8px 0' }}>Users</h3>
+
+        {/* Column width sliders */}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0' }}>
+          {[
+            ['UserID', 'userId'],
+            ['UserName', 'userName'],
+            ['ContactNumber', 'contact'],
+            ['Profile (wallet info)', 'profile'],
+            ['Status', 'status'],
+            ['Approve/Reject', 'actions'],
+          ].map(([label, key]) => (
+            <label key={key} style={{ fontSize: 12 }}>
+              {label}:&nbsp;
+              <input
+                type="range"
+                min={8}
+                max={40}
+                step={1}
+                value={colWidths[key]}
+                onChange={(e) => setColWidths((w) => ({ ...w, [key]: Number(e.target.value) }))}
+              />
+              &nbsp;<span>{colWidths[key]}%</span>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ width: '100%', overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.userId}%` }}>UserID</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.userName}%` }}>UserName</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.contact}%` }}>ContactNumber</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.profile}%` }}>Profile (wallet info)</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.status}%` }}>Status (request?)</th>
+                <th style={{ textAlign: 'center', borderBottom: '1px solid #ddd', padding: '6px 8px', width: `${colWidths.actions}%` }}>Approve / Reject</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(typeof visibleUsers !== 'undefined' ? visibleUsers : filteredUsers).length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: '8px', color: '#777' }}>No users to display.</td>
+                </tr>
+              ) : (
+                (typeof visibleUsers !== 'undefined' ? visibleUsers : filteredUsers).map((u, i) => {
+                  const id = String(u?.user_id || u?.userId || u?.telegramId || u?.id || i);
+                  const name = String(u?.name || u?.username || u?.fullName || '');
+                  const contact = String(u?.contact || u?.phone || u?.email || '');
+                  const status = String(
+                    u?.status || u?.requestStatus || u?.approvalStatus || (u?.request ? 'request' : '') || ''
+                  ).toLowerCase();
+                  const walletInfo = (() => {
+                    try {
+                      const wallets = Array.isArray(state?.wallets) ? state.wallets : [];
+                      const w = wallets.find((ww) => String(ww?.user_id || ww?.userId || ww?.id) === String(id));
+                      if (!w) return '';
+                      const bal = Number(w?.balance ?? 0);
+                      const cnt = Number(w?.txn_count ?? w?.transactions_count ?? 0);
+                      return `Balance: ${bal.toLocaleString()} · Txns: ${cnt}`;
+                    } catch { return ''; }
+                  })();
+
+                  return (
+                    <tr key={`${id}-${i}`}>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{id}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{name}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{contact}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{walletInfo}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px' }}>{status}</td>
+                      <td style={{ borderBottom: '1px solid #eee', padding: '6px 8px', textAlign: 'center' }}>
+                        <button style={{ marginRight: 6 }} onClick={() => alert(`Approve ${id}`)}>Approve</button>
+                        <button onClick={() => alert(`Reject ${id}`)}>Reject</button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+      {loadingUsers && (
+        <div style={{ marginTop: 8, fontSize: 13, color: '#1f3a5f' }}>Loading latest users…</div>
+      )}
+      {usersError && (
+        <div style={{ marginTop: 4, fontSize: 13, color: '#b42318' }}>{usersError}</div>
+      )}
     </div>
   );
 }
@@ -1834,7 +2861,8 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
 export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   const { state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
+  const [selectedDate, setSelectedDate] = useState('');
+  const [drawTime, setDrawTime] = useState('');
   useHotspotDebug(
     'admin-points',
     debug,
@@ -1854,6 +2882,7 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   if (!isAdmin) {
     return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
   }
+
   const walletTxns = useMemo(() => state?.walletTxns || [], [state?.walletTxns]);
   const authUserId = state?.auth?.userId || '-';
   const [edit, setEdit] = useState(false);
@@ -1943,8 +2972,10 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
     },
     ...rowHotspots,
   ];
+
   const showOverlay = edit;
   useHotspotDebug('admin-points', debug, hotspots);
+
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -1992,7 +3023,7 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
         <button onClick={() => onNavigate('adminFigures')}>Next: Figures</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={() => setEdit((value) => !value)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
@@ -2000,9 +3031,9 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
 
 export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
-  const { state } = useAppState();
+  const { state, setWalletData } = useAppState();
+  const [refreshing, setRefreshing] = useState(false);
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
   useHotspotDebug(
     'admin-figures',
     debug,
@@ -2022,15 +3053,180 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
   if (!isAdmin) {
     return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
   }
+  const handleRefresh = useCallback(async () => {
+    const init = getInitData();
+    if (!init) {
+      alert('Open inside Telegram to continue (initData missing).');
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const r = await fetch('/api/data-balance', { headers: { Authorization: 'tma ' + init } });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && (j?.wallet || Array.isArray(j?.txns) || Array.isArray(j?.bets))) {
+        setWalletData({
+          wallet: j.wallet || state.wallet || null,
+          txns: Array.isArray(j.txns) ? j.txns : (state.walletTxns || []),
+          bets: normalizeBetsFromResponse(j.bets),
+        });
+      }
+    } catch (e) {
+      console.log('AdminFigures refresh error:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [setWalletData, state.wallet, state.walletTxns]);
+
+  // --- Step #4 Safe Version (restore render + prepare overlays) ---
+  const groupARect = { left: 4.89, top: 16.90, width: 40.73, height: 17.87 };
+
+  // Safe guards
+  const bets = Array.isArray(state?.bets) ? state.bets : [];
+  const txns = Array.isArray(state?.walletTxns) ? state.walletTxns : [];
+
+  // Temporary debug
+  console.log('AdminFiguresDataScreen loaded', { bets: bets.length, txns: txns.length });
+
+  // ---- Safe helpers to compute per-figure totals and overlays for all groups ----
+  const parseFigureFromNote = (note) => {
+    const s = String(note || '').toUpperCase();
+    const mEq = s.match(/\b([ABCD])\s*=\s*(\d{1,2})\b/); // A=12
+    if (mEq) return { group: mEq[1], figure: Number(mEq[2]) };
+    const mCompact = s.match(/\b([ABCD])\s*(\d{1,2})\b/); // A12
+    if (mCompact) return { group: mCompact[1], figure: Number(mCompact[2]) };
+    return null;
+  };
+
+  const computeFigureTotals = (groupCode) => {
+    const totals = new Map();
+    // From in-memory bets first
+    for (const b of (Array.isArray(bets) ? bets : [])) {
+      const g = String(b?.group_code || b?.group || '').toUpperCase();
+      const f = Number(b?.figure);
+      const pts = Math.abs(Number(b?.points ?? b?.amount ?? 0));
+      if (g === groupCode && Number.isFinite(f) && f >= 1 && f <= 36 && Number.isFinite(pts)) {
+        totals.set(f, (totals.get(f) || 0) + pts);
+      }
+    }
+    // Wallet transactions fallback (type=bet and note encodes group/figure)
+    for (const t of (Array.isArray(txns) ? txns : [])) {
+      const type = String(t?.type || '').toLowerCase();
+      if (type !== 'bet') continue;
+      const parsed = parseFigureFromNote(t?.note);
+      if (!parsed) continue;
+      const { group, figure } = parsed;
+      const pts = Math.abs(Number(t?.amount) || 0);
+      if (group === groupCode && Number.isFinite(figure) && figure >= 1 && figure <= 36 && Number.isFinite(pts)) {
+        totals.set(figure, (totals.get(figure) || 0) + pts);
+      }
+    }
+    return totals; // Map<figure, total>
+  };
+
+  const makeFigureOverlays = (groupCode, rect, totalsMap) => {
+    const overlays = [];
+    const rows = 6, cols = 6;
+    const cellW = rect.width / cols;
+    const cellH = rect.height / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;   // 0..35
+        const figure = idx + 1;     // 1..36
+        const total = Number(totalsMap.get(figure) || 0);
+        const show = Number.isFinite(total) && total > 0;
+        overlays.push({
+          key: `fig_${groupCode}_${figure}`,
+          kind: 'input',
+          title: `${groupCode}#${figure}`,
+          left: `${(rect.left + cellW * c).toFixed(2)}%`,
+          top: `${(rect.top + cellH * r).toFixed(2)}%`,
+          width: `${cellW.toFixed(2)}%`,
+          height: `${cellH.toFixed(2)}%`,
+          value: show ? `${groupCode}#${figure}: ${total.toLocaleString()}` : '',
+          readOnly: true,
+          inputType: 'text',
+          coerceNumber: false,
+          inputStyle: {
+            background: 'transparent', border: '0', boxShadow: 'none',
+            textAlign: 'center', fontWeight: 700,
+            color: show ? '#1f2937' : 'transparent', padding: 0,
+          },
+        });
+      }
+    }
+    return overlays;
+  };
+
+  // Rects for groups from your coordinates
+  const groupBRect = { left: 54.72, top: 16.90, width: 40.73, height: 17.87 };
+  const groupCRect = { left:  5.23, top: 43.86, width: 40.65, height: 18.89 };
+  const groupDRect = { left: 55.23, top: 43.86, width: 40.14, height: 18.53 };
+
+  // Compute totals and overlays (memoized)
+  const totalsA = useMemo(() => computeFigureTotals('A'), [bets, txns]);
+  const totalsB = useMemo(() => computeFigureTotals('B'), [bets, txns]);
+  const totalsC = useMemo(() => computeFigureTotals('C'), [bets, txns]);
+  const totalsD = useMemo(() => computeFigureTotals('D'), [bets, txns]);
+
+  const overlaysA = useMemo(() => makeFigureOverlays('A', groupARect, totalsA), [totalsA]);
+  const overlaysB = useMemo(() => makeFigureOverlays('B', groupBRect, totalsB), [totalsB]);
+  const overlaysC = useMemo(() => makeFigureOverlays('C', groupCRect, totalsC), [totalsC]);
+  const overlaysD = useMemo(() => makeFigureOverlays('D', groupDRect, totalsD), [totalsD]);
+
+  // Totals per group for the separator bands
+  const sumTotals = (map) => Array.from(map.values()).reduce((a, b) => a + Number(b || 0), 0);
+  const totalA = useMemo(() => sumTotals(totalsA), [totalsA]);
+  const totalB = useMemo(() => sumTotals(totalsB), [totalsB]);
+  const totalC = useMemo(() => sumTotals(totalsC), [totalsC]);
+  const totalD = useMemo(() => sumTotals(totalsD), [totalsD]);
+
+  const totalBandInput = (key, title, left, top, width, height, value) => ({
+    key,
+    kind: 'input',
+    title,
+    left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`,
+    value,
+    readOnly: true, inputType: 'text', coerceNumber: false,
+    inputStyle: { background: 'transparent', border: '0', boxShadow: 'none', textAlign: 'center', fontWeight: 700, color: '#111827', padding: 0 },
+  });
+
+  // --- Date and drawTime filters with correct defaults ---
+  const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const [drawTime, setDrawTime] = useState('00:00');
+
   const hotspots = [
     {
-      key: 'filters',
-      title: 'Filter selection',
+      key: 'dateFilter',
+      kind: 'input',
+      title: 'Date selection filter',
       left: '4.04%',
       top: '10.70%',
-      width: '69.22%',
-      height: '2.00%',
-      onClick: () => alert('Open filters for date/group selection (placeholder)'),
+      width: '34.50%',     // half of 69.22%
+      height: '3.00%',
+      value: selectedDate,
+      placeholder: 'YYYY-MM-DD',
+      inputType: 'text',   // keep generic; can switch to 'date' if your runtime supports it
+      inputStyle: { textAlign: 'left', padding: '0 8px', background: '#fff', border: '0' },
+      onChange: setSelectedDate,
+    },
+    {
+      key: 'drawTime',
+      kind: 'select',
+      title: 'Draw time',
+      left: '40.54%',      // 4.04 + 34.50 to align exactly after date input
+      top: '10.70%',
+      width: '34.50%',     // 69.22 total - 34.50
+      height: '3.00%',
+      value: drawTime,
+      options: [
+        { label: '00:00', value: '00:00' },
+        { label: '06:00', value: '06:00' },
+        { label: '12:00', value: '12:00' },
+        { label: '18:00', value: '18:00' },
+      ],
+      placeholder: 'Select time',
+      onChange: setDrawTime,
     },
     {
       key: 'groupA',
@@ -2040,15 +3236,8 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
       width: '40.73%',
       height: '17.87%',
     },
-    {
-      key: 'groupA-details',
-      title: 'Group A tracking bets',
-      left: '4.89%',
-      top: '35.98%',
-      width: '40.82%',
-      height: '2.16%',
-      onClick: () => alert('View Group A tracking bets (placeholder)'),
-    },
+    ...overlaysA,
+    totalBandInput('groupA-total', 'Total points bets grpA', 4.89, 35.98, 40.82, 2.16, `Total A: ${totalA.toLocaleString()} pts`),
     {
       key: 'groupB',
       title: 'Group B total points (live)',
@@ -2057,15 +3246,8 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
       width: '40.73%',
       height: '17.87%',
     },
-    {
-      key: 'groupB-details',
-      title: 'Group B tracking bets',
-      left: '54.72%',
-      top: '35.98%',
-      width: '40.82%',
-      height: '2.16%',
-      onClick: () => alert('View Group B tracking bets (placeholder)'),
-    },
+    ...overlaysB,
+    totalBandInput('groupB-total', 'Total points bets grpB', 54.72, 35.98, 40.82, 2.16, `Total B: ${totalB.toLocaleString()} pts`),
     {
       key: 'groupC',
       title: 'Group C total points (live)',
@@ -2074,15 +3256,8 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
       width: '40.65%',
       height: '18.89%',
     },
-    {
-      key: 'groupC-details',
-      title: 'Group C tracking bets',
-      left: '5.31%',
-      top: '63.02%',
-      width: '40.31%',
-      height: '2.55%',
-      onClick: () => alert('View Group C tracking bets (placeholder)'),
-    },
+    ...overlaysC,
+    totalBandInput('groupC-total', 'Total points bets grpC', 5.31, 63.02, 40.31, 2.55, `Total C: ${totalC.toLocaleString()} pts`),
     {
       key: 'groupD',
       title: 'Group D total points (live)',
@@ -2091,18 +3266,13 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
       width: '40.14%',
       height: '18.53%',
     },
-    {
-      key: 'groupD-details',
-      title: 'Group D tracking bets',
-      left: '55.31%',
-      top: '62.70%',
-      width: '40.14%',
-      height: '2.39%',
-      onClick: () => alert('View Group D tracking bets (placeholder)'),
-    },
+    ...overlaysD,
+    totalBandInput('groupD-total', 'Total points bets grpD', 55.31, 62.70, 40.14, 2.39, `Total D: ${totalD.toLocaleString()} pts`),
   ];
+
   const showOverlay = edit;
   useHotspotDebug('admin-figures', debug, hotspots);
+
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -2118,16 +3288,24 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
         <button onClick={() => onNavigate('adminResults')}>Next: Results</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={() => setEdit((value) => !value)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>
       </div>
     </div>
   );
 }
 
 export function AdminResultPostingScreen({ onNavigate, debug = false }) {
-  const { postResult, state } = useAppState();
+  const { state, postResult } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
+  const [edit, setEdit] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState('A');
+  const [selectedFigure, setSelectedFigure] = useState('1');
+  const [gifFile, setGifFile] = useState(null);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [isPosting, setIsPosting] = useState(false);
+  const fileInputRef = useRef(null);
+
   useHotspotDebug(
     'admin-results',
     debug,
@@ -2144,38 +3322,33 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
         ]
       : []
   );
+
   if (!isAdmin) {
     return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
   }
-  const [edit, setEdit] = useState(false);
-  const [selectedGroup, setSelectedGroup] = useState('A');
-  const [selectedFigure, setSelectedFigure] = useState('1');
-  const [gifFile, setGifFile] = useState(null);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [isPosting, setIsPosting] = useState(false);
-  const fileInputRef = useRef(null);
 
-  const groupOptions = useMemo(() => ['A', 'B', 'C', 'D'].map((value) => ({ value, label: `Group ${value}` })), []);
   const figureOptions = useMemo(
-    () =>
-      Array.from({ length: 36 }, (_, idx) => {
-        const value = String(idx + 1);
-        return { value, label: `Figure ${idx + 1}` };
-      }),
+    () => Array.from({ length: 36 }, (_, idx) => ({ label: `Figure ${idx + 1}`, value: String(idx + 1) })),
+    []
+  );
+  const groupOptions = useMemo(
+    () => ['A', 'B', 'C', 'D'].map((group) => ({ label: `Group ${group}`, value: group })),
     []
   );
 
   const handleFileClick = useCallback(() => {
-    if (edit) return;
     if (fileInputRef.current) {
-      fileInputRef.current.value = '';
       fileInputRef.current.click();
     }
-  }, [edit]);
+  }, []);
 
   const handleFileChange = useCallback((event) => {
     const file = event.target.files && event.target.files[0];
-    if (!file) return;
+    if (!file) {
+      setGifFile(null);
+      setStatusMessage('');
+      return;
+    }
     const isGif = (file.type && file.type.toLowerCase() === 'image/gif') || /\.gif$/i.test(file.name);
     if (!isGif) {
       setStatusMessage('Please select a .gif file.');
@@ -2187,37 +3360,34 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
     setStatusMessage('');
   }, []);
 
-  const handlePost = useCallback(
-    async () => {
-      if (isPosting) return;
-      if (!selectedGroup || !selectedFigure) {
-        setStatusMessage('Select both a group and figure.');
-        return;
-      }
-      if (!gifFile) {
-        setStatusMessage('Upload the winning GIF before posting.');
-        return;
-      }
+  const handlePost = useCallback(async () => {
+    if (isPosting) return;
+    if (!selectedGroup || !selectedFigure) {
+      setStatusMessage('Select both a group and figure.');
+      return;
+    }
+    if (!gifFile) {
+      setStatusMessage('Upload the winning GIF before posting.');
+      return;
+    }
 
-      setIsPosting(true);
-      setStatusMessage('');
-      try {
-        await postResult({ group: selectedGroup, figure: Number(selectedFigure), gifFile });
-        alert(`Results for Group ${selectedGroup}, Figure ${selectedFigure} posted.`);
-        setGifFile(null);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-        onNavigate('adminDashboard');
-      } catch (error) {
-        console.error('Failed to post result', error);
-        setStatusMessage('Failed to post results. Please try again.');
-      } finally {
-        setIsPosting(false);
+    setIsPosting(true);
+    setStatusMessage('');
+    try {
+      await postResult({ group: selectedGroup, figure: Number(selectedFigure), gifFile });
+      alert(`Results for Group ${selectedGroup}, Figure ${selectedFigure} posted.`);
+      setGifFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
       }
-    },
-    [gifFile, isPosting, onNavigate, postResult, selectedFigure, selectedGroup]
-  );
+      onNavigate('adminDashboard');
+    } catch (error) {
+      console.error('Failed to post result', error);
+      setStatusMessage('Failed to post results. Please try again.');
+    } finally {
+      setIsPosting(false);
+    }
+  }, [gifFile, isPosting, onNavigate, postResult, selectedFigure, selectedGroup]);
 
   const hotspots = [
     { key: 'backDash', title: 'Back to Admin', left: '4.29%', top: '1.90%', width: '13.78%', height: '0.82%', onClick: () => onNavigate('adminDashboard') },
@@ -2266,8 +3436,10 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
       onClick: handlePost,
     },
   ];
+
   const showOverlay = edit;
   useHotspotDebug('admin-results', debug, hotspots);
+
   return (
     <div style={{ padding: 12 }}>
       <input
@@ -2293,14 +3465,239 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
         </div>
       )}
       {statusMessage && (
-        <div style={{ marginTop: 8, fontSize: 13, color: '#b42318' }}>
-          {statusMessage}
-        </div>
+        <div style={{ marginTop: 8, fontSize: 13, color: '#b42318' }}>{statusMessage}</div>
       )}
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
-        <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+        <button onClick={() => setEdit((value) => !value)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
   );
+}
+
+  // --- Layout 14: Admin Reports (connected to /api/admin?action=reports) ---
+  // TAG: admin-reports-01
+  export function AdminReportsScreen({ onNavigate, debug = false }) {
+    const [edit, setEdit] = useState(false);
+    const [table, setTable] = useState('wallet_txns'); // default
+    const [status, setStatus] = useState('');          // '', 'approved', 'pending', 'rejected'
+    const [search, setSearch] = useState('');          // client-side filter for now
+    const [limit, setLimit] = useState(50);
+    const [offset, setOffset] = useState(0);
+    const [rows, setRows] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState('');
+    const [totals, setTotals] = useState({ count: 0 });
+
+    const initData = getInitData();
+
+    const fetchReports = useCallback(async () => {
+      if (!initData) { alert('Open inside Telegram (initData).'); return; }
+      setLoading(true); setErr('');
+      try {
+        const res = await fetch('/api/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData },
+          body: JSON.stringify({ action: 'reports', table, status: status || undefined, limit, offset })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.ok) {
+          const msg = json?.reason || `Reports fetch failed (${res.status})`;
+          setErr(String(msg));
+          setRows([]);
+        } else {
+          const raw = Array.isArray(json.rows) ? json.rows : [];
+          // simple client-side search filter (optional)
+          const filtered = search
+            ? raw.filter(r => JSON.stringify(r).toLowerCase().includes(search.toLowerCase()))
+            : raw;
+          setRows(filtered);
+          setTotals({ count: raw.length });
+        }
+      } catch (e) {
+        setErr(e?.message || String(e));
+        setRows([]);
+      } finally {
+        setLoading(false);
+      }
+    }, [initData, table, status, limit, offset, search]);
+
+    useEffect(() => { fetchReports(); }, [fetchReports]);
+
+    const hotspots = [
+      { key: 'hdrBack', title: 'Back', left: '3%', top: '6%', width: '15%', height: '5.5%', onClick: () => onNavigate('adminDashboard') },
+      { key: 'totalsBar', title: `Total rows: ${totals.count}`, left: '2%', top: '9%', width: '96%', height: '5.5%' },
+
+      { key: 'tableSelect', kind: 'select', title: 'Table', left: '3%', top: '16%', width: '44%', height: '5.5%',
+        value: table, options: [
+          { label: 'wallet_txns', value: 'wallet_txns' },
+          { label: 'withdraw_requests', value: 'withdraw_requests' },
+          { label: 'deposit_requests', value: 'deposit_requests' },
+          { label: 'draws', value: 'draws' },
+          { label: 'bets', value: 'bets' },
+          { label: 'wallets', value: 'wallets' },
+          { label: 'profiles', value: 'profiles' },
+        ],
+        onChange: (v) => { setOffset(0); setTable(v); }
+      },
+      { key: 'statusSelect', kind: 'select', title: 'Status', left: '53%', top: '16%', width: '20%', height: '5.5%',
+        value: status, options: [
+          { label: 'All', value: '' },
+          { label: 'approved', value: 'approved' },
+          { label: 'pending', value: 'pending' },
+          { label: 'rejected', value: 'rejected' },
+        ],
+        onChange: (v) => { setOffset(0); setStatus(v); }
+      },
+      { key: 'refreshBtn', title: loading ? 'Loading…' : 'Refresh', left: '76%', top: '16%', width: '20%', height: '5.5%', onClick: loading ? undefined : fetchReports },
+
+      { key: 'searchInput', kind: 'input', title: 'Search', left: '3%', top: '23%', width: '60%', height: '5.5%',
+        value: search, inputType: 'text', placeholder: 'Search current page…',
+        onChange: (v) => setSearch(v)
+      },
+      { key: 'limitSelect', kind: 'select', title: 'Limit', left: '65%', top: '23%', width: '15%', height: '5.5%',
+        value: String(limit), options: [{label:'50',value:'50'},{label:'100',value:'100'},{label:'200',value:'200'}],
+        onChange: (v) => { setOffset(0); setLimit(Number(v)||50); }
+      },
+      { key: 'exportCsv', title: 'Export CSV', left: '82%', top: '23%', width: '14%', height: '5.5%',
+        onClick: () => {
+          const header = rows[0] ? Object.keys(rows[0]) : [];
+          const lines = [header.join(',')].concat(rows.map(r => header.map(k => JSON.stringify(r[k] ?? '')).join(',')));
+          const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a'); a.href = url; a.download = `${table}-${Date.now()}.csv`; a.click();
+          URL.revokeObjectURL(url);
+        }
+      },
+
+      { key: 'grid', title: 'Data Grid', left: '3%', top: '30%', width: '94%', height: '48%' },
+
+      { key: 'prevPage', title: 'Prev', left: '3%', top: '80%', width: '20%', height: '5.5%',
+        onClick: () => setOffset(o => Math.max(0, o - limit))
+      },
+      { key: 'pageIndicator', kind: 'input', title: 'Page', left: '25%', top: '80%', width: '50%', height: '5.5%',
+        value: `offset ${offset} · limit ${limit}`, readOnly: true
+      },
+      { key: 'nextPage', title: 'Next', left: '77%', top: '80%', width: '20%', height: '5.5%',
+        onClick: () => setOffset(o => o + limit)
+      },
+    ];
+    const showOverlay = edit;
+    useHotspotDebug('admin-reports', debug, hotspots);
+
+    return (
+      <div style={{ padding: 12 }}>
+        <HotspotImage
+          src={PngAdminReports}
+          alt="Admin Reports"
+          hotspots={hotspots}
+          editable={edit}
+          showOverlay={showOverlay}
+          interactionsEnabled={!edit}
+          onBack={() => onNavigate('adminDashboard')}
+          onDraft={(d) => console.log('AdminReports hotspot draft:', d)}
+        />
+        {/* --- Inline data grid inside hotspot --- */}
+    {/* --- Inline data grid inside hotspot (v: admin-reports-02) --- */}
+      <div
+    style={{
+      position: 'absolute',
+      left: '3%',
+      top: '30%',
+      width: '94%',
+      height: 'calc(55vh)',
+      overflow: 'auto',
+      background: 'rgba(255,255,255,0.97)',
+      borderRadius: 8,
+      padding: 8,
+      fontSize: 13,
+      boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+    }}
+    >
+    <h3 style={{ margin: '4px 0', fontWeight: 600 }}>Rows ({rows.length})</h3>
+    {err && <div style={{ color: '#b42318', marginBottom: 6 }}>{err}</div>}
+    {rows.length === 0 ? (
+      <div style={{ color: '#777' }}>{loading ? 'Loading…' : 'No rows.'}</div>
+    ) : (
+      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+        <thead>
+          <tr>
+            {Object.keys(rows[0]).map((k) => (
+              <th
+                key={k}
+                style={{
+                  textAlign: 'left',
+                  borderBottom: '1px solid #ddd',
+                  padding: '4px 6px',
+                  whiteSpace: 'nowrap',
+                  background: '#f9fafb',
+                }}
+              >
+                {k}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const type = (r.type || '').toLowerCase();
+            const status = (r.status || '').toLowerCase();
+            let color = '';
+            if (type === 'credit') color = '#148f2b';
+            else if (type === 'debit') color = '#b42318';
+            else if (status === 'pending') color = '#f59e0b';
+            else if (status === 'approved') color = '#0284c7';
+            else if (status === 'rejected') color = '#6b7280';
+            return (
+              <tr key={r.id || i}>
+                {Object.keys(rows[0]).map((k) => (
+                  <td
+                    key={k}
+                    style={{
+                      borderBottom: '1px solid #eee',
+                      padding: '4px 6px',
+                      whiteSpace: 'nowrap',
+                      color: k === 'type' || k === 'status' ? color : undefined,
+                      fontWeight: k === 'type' || k === 'status' ? 600 : 400,
+                    }}
+                  >
+                    {String(r[k] ?? '')}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+    </div>
+    {/* --- Footer Controls --- */}
+    <div
+      style={{
+      position: 'absolute',
+      left: '3%',
+      top: '87%',
+      width: '94%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '4px 8px',
+    }}
+    >
+    <button
+      onClick={() => onNavigate('adminDashboard')}
+      style={{
+        background: '#333',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        padding: '6px 12px',
+        cursor: 'pointer',
+      }}
+    >
+      Back
+    </button>
+    <span style={{ fontSize: 12, opacity: 0.7 }}>v: admin-reports-01</span>
+    </div>
+      </div>);
 }

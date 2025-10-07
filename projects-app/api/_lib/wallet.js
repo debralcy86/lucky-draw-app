@@ -15,13 +15,33 @@ export function createServiceClient() {
 }
 
 export async function ensureWallet(client, userId) {
-  const { data, error } = await client
+  const existing = await client
     .from('wallets')
-    .upsert({ user_id: userId, balance: 0 }, { onConflict: 'user_id' })
+    .select('user_id,balance')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (existing.error && existing.error.code !== 'PGRST116') {
+    // Propagate unexpected errors
+    return { error: existing.error };
+  }
+
+  if (existing.data) {
+    // Normalize balance to number
+    return { data: { user_id: existing.data.user_id, balance: Number(existing.data.balance ?? 0) } };
+  }
+
+  const insert = await client
+    .from('wallets')
+    .insert({ user_id: userId, balance: 0 })
     .select('user_id,balance')
     .maybeSingle();
-  if (error) return { error };
-  const wallet = data || { user_id: userId, balance: 0 };
+
+  if (insert.error) {
+    return { error: insert.error };
+  }
+
+  const wallet = insert.data || { user_id: userId, balance: 0 };
   wallet.balance = Number(wallet.balance ?? 0);
   return { data: wallet };
 }
@@ -47,7 +67,11 @@ export async function listTransactions(client, userId, { limit = 20, offset = 0 
     .order('created_at', { ascending: false })
     .range(rangeStart, rangeEnd);
   if (error) return { error };
-  return { data: data || [] };
+  const mapped = (data || []).map((row) => ({
+    ...row,
+    createdAt: row.created_at || row.createdAt || null,
+  }));
+  return { data: mapped };
 }
 
 export async function adjustWalletBalance(client, { userId, delta, note, type }) {

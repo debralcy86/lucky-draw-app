@@ -68,3 +68,69 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+Telegram Mini App `initData` Verification — Debug Log (Sep 30, 2025)
+
+Issue:  
+/api/verify endpoint crashing with FUNCTION_INVOCATION_FAILED during Telegram onboarding.
+
+Steps Taken:
+
+1.  Initial curl test:
+  ⁠◦  Used expired initData
+  ⁠◦  Server crashed silently
+2.  Hardened /verify.mjs:
+  ⁠◦  Added method + content-type guards
+  ⁠◦  Defensive fallback for missing initData
+  ⁠◦  Wrapped Supabase logic in try/catch
+  ⁠◦  Still crashed
+3.  Suspected .maybeSingle() SDK issue:
+  ⁠◦  Replaced with .single() and fallback
+  ⁠◦  Still crashed
+4.  Confirmed fresh initData from Telegram WebApp:
+  ⁠◦  Verified HMAC signature
+  ⁠◦  Still crashed
+5.  Split .insert().select().single() into two steps:
+  ⁠◦  Insert then fetch
+  ⁠◦  Still crashed
+6.  Renamed function to /verifyUser.mjs:
+  ⁠◦  Crash resolved
+  ⁠◦  Confirmed Vercel runtime cache or SDK import conflict
+7.  Rewrote logic using Supabase REST API:
+  ⁠◦  No SDK
+  ⁠◦  Used fetch() with service role key
+  ⁠◦  Stable response: { "ok": true }
+  POST https://lucky-draw-1avzr4f6f-debra-ls-projects.vercel.app/api/verifyUser
+  {
+  "initData": "user=%7B%22id%22%3A8013482840%2C%22first_name%22%3A%22Debra%22%2C%22last_name%22%3A%22Leong%22%2C%22language_code%22%3A%22en%22%2C%22allows_write_to_pm%22%3Atrue%2C%22photo_url%22%3A%22https%3A%5C%2F%5C%2Ft.me%5C%2Fi%5C%2Fuserpic%5C%2F320%5C%2FSz6Ss3ZTGVwOVb5WupcdtF2iKa0oGeWACPpi8hGfDmoP7L8xBKTTAAyj8u2PG2Rd.svg%22%7D&chat_instance=-7933660314068559763&chat_type=private&auth_date=1759215495&signature=uEPx3eSXv0tZln8TZusRQuJRwXPzWrluM0AylrLYMKgUjkZfzMFvaGQpyYbb7l5NUZxNiVrwBN1lbkhsfnVlBA&hash=2a7890d7243e61e112fe649fa0637c6a09f1bb312599e126bcd1ceb5663a5adf"
+}
+{
+  "ok": true,
+  "user": {
+    "telegram_id": 8013482840,
+    "username": "debra",
+    "first_name": "Debra",
+    "last_name": "Leong",
+    "language_code": "en"
+  }
+}
+🔒 Notes
+
+•  initData must be fresh (within ~24h)
+•  Use Telegram WebApp window.Telegram.WebApp.initData to capture live payload
+•  Supabase REST API is stable inside Vercel Functions
+
+### ⚠️ Serverless Runtime Guard
+
+Avoid using `window` or other browser-only globals inside `api/*.js` routes. These run in Vercel’s Node-based serverless runtime and will throw if browser-only guards are not properly scoped.
+
+**Example:**
+```js
+// ❌ This will crash inside /api/profile.js
+if (window.Telegram) { ... }
+
+// ✅ Use this instead in frontend-only files
+if (typeof window !== "undefined" && window.Telegram) { ... }
+
+Impact:  
+Referencing window inside /api/profile caused a silent crash, breaking the Telegram initData verification flow and returning userid = null. Once removed, the backend correctly resolved the user profile.

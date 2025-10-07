@@ -20,6 +20,7 @@ function resolveScreenComponent(screen) {
     adminPoints: Screens.AdminPointsTrackingScreen,
     adminFigures: Screens.AdminFiguresDataScreen,
     adminResults: Screens.AdminResultPostingScreen,
+    adminReports: Screens.AdminReportsScreen,
   };
   if (key === 'board') {
     // Prefer group-specific exports; if missing, show default fallback below
@@ -155,28 +156,21 @@ function ShellInner() {
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 16 }}>
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <h1 style={{ margin: 0, fontSize: 18 }}>Lucky Draw Mini App</h1>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600 }}>Balance: {state.wallet.balance.toLocaleString()} pts</span>
-          <button onClick={() => onNavigate('dashboard')}>Dashboard</button>
-          <button onClick={() => onNavigate('history')}>History</button>
-          <button onClick={() => onNavigate('deposit')}>Deposit</button>
-          <button onClick={() => onNavigate('withdrawRequest')}>Withdraw Request</button>
-          <button onClick={() => onNavigate('withdrawSetup')}>Withdraw</button>
-          <button onClick={() => onNavigate('invite')}>Invite</button>
-          <button onClick={() => onNavigate('adminDashboard')} disabled={adminGate.checking}>
-            {adminButtonLabel}
-          </button>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={debugMode}
-              onChange={(e) => setDebugMode(e.target.checked)}
-            />
-            Debug overlays
-          </label>
-          {typeof window !== 'undefined' && window.Telegram?.WebApp && (
-            <button onClick={() => window.Telegram.WebApp.expand()} title="Expand to full height">Full height</button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
+          {state?.auth?.isAdmin && (
+            <button
+              onClick={() => onNavigate('adminDashboard')}
+              disabled={adminGate.checking}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #ccc',
+                background: '#f8f8f8',
+                cursor: 'pointer',
+              }}
+            >
+              Admin
+            </button>
           )}
         </div>
         {!adminGate.checking && adminGate.error && (
@@ -184,6 +178,7 @@ function ShellInner() {
             {adminGate.error}
           </div>
         )}
+        {/* TAG: header-admin-only-v1 */}
       </header>
       <main>
         {Comp ? (

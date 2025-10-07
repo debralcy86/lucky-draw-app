@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+console.log('[telegram.mjs] verifyInitData module loaded');
+
 function timingSafeEqHex(aHex, bHex) {
   try {
     const a = Buffer.from(aHex, 'hex');
@@ -15,13 +17,18 @@ export function verifyInitData(initDataString, botToken) {
   if (!initDataString || typeof initDataString !== 'string') {
     return { ok: false, reason: 'missing_init_data' };
   }
+
+  console.log('[verifyInitData] raw initData:', initDataString);
+
+  const params = new URLSearchParams(initDataString);
+  const hash = params.get('hash');
+  console.log('[verifyInitData] extracted hash:', hash);
+
   if (!botToken) {
     return { ok: false, reason: 'missing_bot_token' };
   }
 
   // Parse key=value pairs
-  const params = new URLSearchParams(initDataString);
-  const hash = params.get('hash');
   if (!hash) {
     return { ok: false, reason: 'missing_hash' };
   }
@@ -53,5 +60,18 @@ export function verifyInitData(initDataString, botToken) {
   }
 
   return { ok: true };
+}
+
+export function launchTelegramBot(botUsername, payload = '') {
+  const url = `https://t.me/${botUsername}?start=${payload}`;
+  const logPrefix = '[launchTelegramBot]';
+
+  if (window.Telegram && Telegram.WebApp) {
+    console.log(`${logPrefix} Detected Telegram WebApp context`);
+    Telegram.WebApp.openTelegramLink(url);
+  } else {
+    console.warn(`${logPrefix} Not in Telegram WebApp, falling back to window.location`);
+    window.location.href = url;
+  }
 }
 

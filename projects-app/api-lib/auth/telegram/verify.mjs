@@ -19,14 +19,26 @@ async function handler(req, res) {
     return res.status(400).json({ ok: false, error: 'invalid_json' });
   }
   const initData = body?.initData;
+  console.log('[Verify] initData:', initData);
   if (!initData || typeof initData !== 'string') {
     return res.status(400).json({ ok: false, error: 'missing_init_data' });
   }
 
-  const verified = verifyInitData(initData, token);
-  if (!verified.ok) {
-    return res.status(401).json({ ok: false, error: 'unauthorized', reason: verified.reason });
+  console.log('[Verify] Inline test start');
+  console.log('[Verify] typeof verifyInitData:', typeof verifyInitData);
+  console.log('[Verify] verifyInitData.toString():', verifyInitData?.toString()?.slice(0, 100));
+
+  try {
+  const result = verifyInitData(initData, token);
+  console.log('[Verify] HMAC test result:', result);
+  if (!result?.ok) {
+    console.log('[Verify] HMAC failed reason:', result?.reason);
+    return res.status(401).json({ ok: false, error: 'unauthorized', reason: result?.reason });
   }
+} catch (err) {
+  console.error('[Verify] HMAC test error:', err);
+  return res.status(500).json({ ok: false, error: 'hmac_crash', reason: err.message });
+}
 
   const params = new URLSearchParams(initData);
   const userJson = params.get('user');

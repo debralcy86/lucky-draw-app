@@ -9,12 +9,12 @@ async function handler(req, res) {
     return res.status(405).json({ ok: false, reason: 'method_not_allowed' });
   }
   try {
-    const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-    if (!BOT_TOKEN) {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
       return res.status(500).json({ ok: false, reason: 'missing_bot_token_runtime' });
     }
 
-    const token_fp8 = crypto.createHash('sha256').update(BOT_TOKEN).digest('hex').slice(0, 8);
+    const token_fp8 = crypto.createHash('sha256').update(botToken).digest('hex').slice(0, 8);
     try { res.setHeader('X-BotToken-FP', token_fp8); } catch {}
 
     const auth = req.headers.authorization || req.headers.Authorization || '';
@@ -29,7 +29,9 @@ async function handler(req, res) {
     }
 
     // Validate signed payload; throws on failure/expiry
-    validate(initData, BOT_TOKEN);
+    validate(typeof initData === 'string' ? initData : String(initData), botToken, {
+      expiresIn: 86400 // 24 hours tolerance
+    });
     const parsed = parse(initData);
 
     const user = parsed.user || {};

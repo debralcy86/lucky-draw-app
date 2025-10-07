@@ -10,6 +10,12 @@ import {
   adjustWalletBalance,
 } from './_lib/wallet.js';
 
+function isMissingGroupColumn(error) {
+  if (!error) return false;
+  const text = String(error.message || error.details || error.code || error).toLowerCase();
+  return text.includes('column') && text.includes('group');
+}
+
 function rid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -81,13 +87,54 @@ async function handler(req, res) {
       }
       const txns = txnResult.data;
 
+      let betRows = [];
+      let betError = null;
+      const betQuery = await supabase
+        .from('bets')
+        .select('id,draw_id,group_code,figure,amount,created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (betQuery.error) {
+        if (isMissingGroupColumn(betQuery.error)) {
+          const fallback = await supabase
+            .from('bets')
+            .select('id,draw_id,figure,amount,created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(limit);
+          if (fallback.error) {
+            betError = fallback.error;
+          } else {
+            betRows = fallback.data || [];
+          }
+        } else {
+          betError = betQuery.error;
+        }
+      } else {
+        betRows = betQuery.data || [];
+      }
+
+      const bets = Array.isArray(betRows)
+        ? betRows.map((row) => ({
+            id: row.id,
+            draw_id: row.draw_id,
+            group: row.group_code || row.group || null,
+            figure: row.figure,
+            amount: Number(row.amount ?? 0),
+            created_at: row.created_at,
+          }))
+        : [];
+
       return send(res, 200, {
         ok: true,
         tag: 'data-balance/v1.1-tma-verify-2025-09-28',
         rid: requestId,
         wallet,
         txns: txns ?? [],
+        bets,
         page: { limit, offset, returned: (txns || []).length },
+        ...(betError ? { bets_error: betError.message || String(betError) } : {}),
       });
     }
 

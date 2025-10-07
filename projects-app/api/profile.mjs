@@ -52,6 +52,12 @@ function sanitizeProfilePayload(input = {}) {
   if (typeof input.pin === 'string') out.pin = input.pin.trim();
   if (typeof input.userId === 'string') out.userId = input.userId.trim();
   if (typeof input.user_id === 'string') out.userId = input.user_id.trim();
+  if (typeof input.withdrawMethod === 'string') out.withdrawMethod = input.withdrawMethod.trim();
+  if (typeof input.withdraw_method === 'string') out.withdrawMethod = input.withdraw_method.trim();
+  if (typeof input.withdrawDest === 'string') out.withdrawDest = input.withdrawDest.trim();
+  if (typeof input.withdraw_dest === 'string') out.withdrawDest = input.withdraw_dest.trim();
+  if (typeof input.withdrawHolder === 'string') out.withdrawHolder = input.withdrawHolder.trim();
+  if (typeof input.withdraw_holder === 'string') out.withdrawHolder = input.withdraw_holder.trim();
   return out;
 }
 
@@ -64,6 +70,10 @@ function maskProfileRow(row) {
     has_pin: Boolean(row.pin_hash),
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
+    is_admin: Boolean(row.is_admin),
+    withdraw_method: row.withdraw_method || null,
+    withdraw_dest: row.withdraw_dest || null,
+    withdraw_holder: row.withdraw_holder || null,
   };
 }
 
@@ -129,54 +139,74 @@ export default async function profile(req, res) {
       return send(res, 400, { ok: false, error: 'User mismatch', rid: requestId });
     }
 
-    const isSave = profilePayload && (profilePayload.name !== undefined || profilePayload.contact !== undefined || profilePayload.pin !== undefined);
-    let profileRow = null;
+    const PROFILE_SELECT = 'user_id,name,contact,pin_hash,created_at,updated_at,is_admin,withdraw_method,withdraw_dest,withdraw_holder';
 
-    let pinValue = profilePayload.pin || '';
+    const { data: existingProfile, error: existingErr } = await sb
+      .from('profiles')
+      .select(PROFILE_SELECT)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existingErr && existingErr.code !== 'PGRST116') {
+      console.error('profile_fetch_error', { rid: requestId, error: existingErr.message });
+      return send(res, 500, { ok: false, error: 'Profile lookup failed', rid: requestId });
+    }
 
-    if (isSave) {
-      const name = profilePayload.name || '';
-      const contact = profilePayload.contact || '';
-      if (!name || !contact || !pinValue) {
+    let profileRow = existingProfile || null;
+
+    const needsProfileSave = profilePayload.name !== undefined
+      || profilePayload.contact !== undefined
+      || profilePayload.pin !== undefined;
+    const needsWithdrawSave = profilePayload.withdrawMethod !== undefined
+      || profilePayload.withdrawDest !== undefined
+      || profilePayload.withdrawHolder !== undefined;
+    const isSave = needsProfileSave || needsWithdrawSave;
+
+    let pinHash = profileRow?.pin_hash ?? null;
+    if (profilePayload.pin !== undefined) {
+      const trimmedPin = profilePayload.pin.trim();
+      pinHash = trimmedPin ? hashPin(trimmedPin) : null;
+    }
+
+    if (needsProfileSave) {
+      const name = profilePayload.name ?? profileRow?.name ?? '';
+      const contact = profilePayload.contact ?? profileRow?.contact ?? '';
+      if (!name || !contact || (!pinHash && !profileRow?.pin_hash)) {
         return send(res, 400, { ok: false, error: 'Missing profile fields', rid: requestId });
       }
+    }
 
-      const pinHash = pinValue ? hashPin(pinValue) : null;
+    if (needsWithdrawSave) {
+      const method = profilePayload.withdrawMethod ?? profileRow?.withdraw_method ?? '';
+      const dest = profilePayload.withdrawDest ?? profileRow?.withdraw_dest ?? '';
+      const holder = profilePayload.withdrawHolder ?? profileRow?.withdraw_holder ?? '';
+      if (!method || !dest || !holder) {
+        return send(res, 400, { ok: false, error: 'Missing withdraw fields', rid: requestId });
+      }
+    }
 
+    if (needsProfileSave || needsWithdrawSave || !profileRow) {
       const nextRow = {
         user_id: userId,
-        name,
-        contact,
+        name: profilePayload.name !== undefined ? profilePayload.name : (profileRow?.name || ''),
+        contact: profilePayload.contact !== undefined ? profilePayload.contact : (profileRow?.contact || ''),
         updated_at: new Date().toISOString(),
+        withdraw_method: profilePayload.withdrawMethod !== undefined ? (profilePayload.withdrawMethod || null) : (profileRow?.withdraw_method || null),
+        withdraw_dest: profilePayload.withdrawDest !== undefined ? (profilePayload.withdrawDest || null) : (profileRow?.withdraw_dest || null),
+        withdraw_holder: profilePayload.withdrawHolder !== undefined ? (profilePayload.withdrawHolder || null) : (profileRow?.withdraw_holder || null),
         pin_hash: pinHash,
       };
 
       const { data: upserted, error: upsertErr } = await sb
         .from('profiles')
         .upsert(nextRow, { onConflict: 'user_id' })
-        .select('user_id,name,contact,pin_hash,created_at,updated_at')
+        .select(PROFILE_SELECT)
         .maybeSingle();
       if (upsertErr) {
         console.error('profile_save_error', { rid: requestId, error: upsertErr.message });
         return send(res, 500, { ok: false, error: 'Profile save failed', rid: requestId });
       }
-      profileRow = upserted || { ...nextRow };
+      profileRow = upserted || { ...nextRow, created_at: profileRow?.created_at || new Date().toISOString() };
     }
-
-    if (!profileRow) {
-      const { data: found, error: fetchErr } = await sb
-        .from('profiles')
-        .select('user_id,name,contact,pin_hash,created_at,updated_at')
-        .eq('user_id', userId)
-        .maybeSingle();
-      if (fetchErr) {
-        console.error('profile_fetch_error', { rid: requestId, error: fetchErr.message });
-        return send(res, 500, { ok: false, error: 'Profile lookup failed', rid: requestId });
-      }
-      profileRow = found || null;
-    }
-
-
     const { data: walletRow, error: walletErr } = await sb
       .from('wallets')
       .select('user_id,balance')
