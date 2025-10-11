@@ -1726,7 +1726,7 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
     { key: 'points', title: 'Points', left: '4.00%', top: '27.00%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminPoints') },
     { key: 'figures', title: 'Figures', left: '4.00%', top: '33.66%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminFigures') },
     { key: 'results', title: 'Results Posting', left: '4.00%', top: '40.31%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
-    { key: 'reports', title: 'Reports', left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminResults') },
+    { key: 'reports', title: 'Reports', left: '4.00%', top: '46.93%', width: '91.66%', height: '5.00%', onClick: () => onNavigate('adminReports') },
   ];
   const showOverlay = edit;
   return (
@@ -1747,7 +1747,7 @@ export function AdminDashboardScreen({ onNavigate, debug = false }) {
         <button onClick={() => onNavigate('adminPoints')}>Points</button>
         <button onClick={() => onNavigate('adminFigures')}>Figures</button>
         <button onClick={() => onNavigate('adminResults')}>Results Posting</button>
-        <button onClick={() => onNavigate('adminResults')}>Reports</button>
+        <button onClick={() => onNavigate('adminReports')}>Reports</button>
         <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
       </div>
     </div>
@@ -1758,26 +1758,6 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
   const { state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
-  useHotspotDebug(
-    'admin-users',
-    debug,
-    isAdmin
-      ? [
-          {
-            key: 'placeholder',
-            title: 'placeholder',
-            left: '0%',
-            top: '0%',
-            width: '0%',
-            height: '0%',
-          },
-        ]
-      : []
-  );
-  if (!isAdmin) {
-    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
-  }
 
   // Search field state (Name/ID/Contact)
   const [q, setQ] = useState('');
@@ -1811,6 +1791,9 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
 
   const showOverlay = edit;
   useHotspotDebug('admin-users', debug, hotspots);
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -1834,26 +1817,6 @@ export function AdminUserManagementScreen({ onNavigate, debug = false }) {
 export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   const { state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
-  useHotspotDebug(
-    'admin-points',
-    debug,
-    isAdmin
-      ? [
-          {
-            key: 'placeholder',
-            title: 'placeholder',
-            left: '0%',
-            top: '0%',
-            width: '0%',
-            height: '0%',
-          },
-        ]
-      : []
-  );
-  if (!isAdmin) {
-    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
-  }
   const walletTxns = useMemo(() => state?.walletTxns || [], [state?.walletTxns]);
   const authUserId = state?.auth?.userId || '-';
   const [edit, setEdit] = useState(false);
@@ -1945,6 +1908,9 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   ];
   const showOverlay = edit;
   useHotspotDebug('admin-points', debug, hotspots);
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -2002,26 +1968,6 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
   const [edit, setEdit] = useState(false);
   const { state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
-  useHotspotDebug(
-    'admin-figures',
-    debug,
-    isAdmin
-      ? [
-          {
-            key: 'placeholder',
-            title: 'placeholder',
-            left: '0%',
-            top: '0%',
-            width: '0%',
-            height: '0%',
-          },
-        ]
-      : []
-  );
-  if (!isAdmin) {
-    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
-  }
   const hotspots = [
     {
       key: 'filters',
@@ -2103,6 +2049,9 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
   ];
   const showOverlay = edit;
   useHotspotDebug('admin-figures', debug, hotspots);
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   return (
     <div style={{ padding: 12 }}>
       <HotspotImage
@@ -2127,26 +2076,6 @@ export function AdminFiguresDataScreen({ onNavigate, debug = false }) {
 export function AdminResultPostingScreen({ onNavigate, debug = false }) {
   const { postResult, state } = useAppState();
   const isAdmin = !!state?.auth?.isAdmin;
-  // Always call hook at top
-  useHotspotDebug(
-    'admin-results',
-    debug,
-    isAdmin
-      ? [
-          {
-            key: 'placeholder',
-            title: 'placeholder',
-            left: '0%',
-            top: '0%',
-            width: '0%',
-            height: '0%',
-          },
-        ]
-      : []
-  );
-  if (!isAdmin) {
-    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
-  }
   const [edit, setEdit] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState('A');
   const [selectedFigure, setSelectedFigure] = useState('1');
@@ -2268,6 +2197,9 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
   ];
   const showOverlay = edit;
   useHotspotDebug('admin-results', debug, hotspots);
+  if (!isAdmin) {
+    return <AdminAccessRequired onNavigate={onNavigate} reason={state?.auth?.adminDeniedReason} />;
+  }
   return (
     <div style={{ padding: 12 }}>
       <input
@@ -2300,6 +2232,23 @@ export function AdminResultPostingScreen({ onNavigate, debug = false }) {
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
         <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
+      </div>
+    </div>
+  );
+}
+
+export function AdminReportsScreen({ onNavigate, debug = false }) {
+  const [edit, setEdit] = useState(false);
+  useHotspotDebug('admin-reports', debug, []);
+  return (
+    <div style={{ padding: 12 }}>
+      <h2>Admin Reports</h2>
+      <p>Placeholder screen — reporting and analytics will be displayed here.</p>
+      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <button onClick={() => onNavigate('adminDashboard')}>Back to Admin</button>
+        <button onClick={() => setEdit(v => !v)}>
+          {edit ? 'Done Editing' : 'Edit Mode'}
+        </button>
       </div>
     </div>
   );
