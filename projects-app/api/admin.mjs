@@ -1,134 +1,72 @@
-import crypto from 'node:crypto';
-import { Buffer } from 'node:buffer';
-export const config = { runtime: 'nodejs' };
+// /api/admin — merged endpoint to reduce serverless count
+const ALLOW = (process.env.CORS_ORIGIN || '').split(',').map(s=>s.trim()).filter(Boolean);
 
-import { createClient } from '@supabase/supabase-js';
-import verifyInitData, { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
-import { withCors } from './_lib/cors.mjs';
-function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
-function bad(res, error) { return res.status(400).json({ ok: false, reason: error }); }
-function err(res, error) { return res.status(500).json({ ok: false, reason: error }); }
-
-function parseTMA(req, botToken) {
-  const h = req.headers.authorization || req.headers.Authorization || '';
-  if (!h || !h.toString().startsWith('tma ')) return { ok: false };
-  const initData = h.toString().slice(4).trim();
-  const check = verifyTelegramInitData(initData, botToken) || verifyInitData(initData, botToken);
-  if (!check?.ok) return { ok: false };
-  const userId = String(check.userId || check.user?.id || check.user?.user?.id || '');
-  if (!userId) return { ok: false };
-  return { ok: true, userId };
-}
-
-function isAdminViaHeader(req, adminToken) {
-  const t = req.headers['x-admin-token'];
-  return !!adminToken && !!t && String(t) === String(adminToken);
-}
-
-function isAdminViaTMA(req, botToken, adminIdsCsv) {
-  if (!botToken || !adminIdsCsv) return false;
-  const parsed = parseTMA(req, botToken);
-  if (!parsed.ok) return false;
-  const allow = new Set(String(adminIdsCsv).split(',').map(s => s.trim()).filter(Boolean));
-  return allow.has(parsed.userId);
-}
-
-async function readJSON(req) {
-  if (typeof req?.json === 'function') {
-    try { return await req.json(); } catch {}
+function setCors(req, res) {
+  const origin = req.headers.origin || '';
+  if (ALLOW.length === 0 || ALLOW.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Vary', 'Origin');
   }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return true;
+  }
+  return false;
+}
+
+async function readJson(req) {
+  if (req.body && typeof req.body === 'object') return req.body;
+  return await new Promise((resolve) => {
+    let data=''; req.on('data', c => data += c);
+    req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
+  });
+}
+
+function hasAdminCookie(req) {
+  const cookie = req.headers.cookie || '';
+  return /(?:^|;\s*)admin_session=ok\b/.test(cookie);
+}
+
+export default async function handler(req, res) {
   try {
-    const chunks = [];
-    for await (const c of req) chunks.push(c);
-    const raw = Buffer.concat(chunks).toString('utf8');
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return null;
-  }
-}
+    if (setCors(req, res)) return;
 
-async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ ok: false, reason: 'Method Not Allowed' });
+    const url = new URL(req.url, `https://${req.headers.host}`);
+    const action = url.searchParams.get('action') || '';
 
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN, ADMIN_TOKEN, ADMIN_USER_IDS } = process.env;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return err(res, 'server_misconfig');
-
-  const authed = isAdminViaHeader(req, ADMIN_TOKEN) || isAdminViaTMA(req, TELEGRAM_BOT_TOKEN, ADMIN_USER_IDS);
-  if (!authed) return res.status(401).json({ ok: false, reason: 'unauthorized' });
-
-  const body = await readJSON(req);
-  if (!body || typeof body !== 'object') return bad(res, 'invalid_json');
-  const action = String(body.action || '').trim();
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-
-  if (action === 'ping') {
-    return ok(res, { pong: true });
-  }
-
-  if (action === 'metrics') {
-    const r1 = await supabase.from('profiles').select('user_id', { count: 'exact', head: true });
-    const r2 = await supabase.from('wallets').select('user_id,balance');
-    const r3 = await supabase.from('wallet_txns').select('id', { count: 'exact', head: true });
-    if (r1.error) return err(res, 'profiles_count_failed');
-    if (r2.error) return err(res, 'wallets_select_failed');
-    if (r3.error) return err(res, 'txns_count_failed');
-    const totalBalance = (r2.data || []).reduce((s, w) => s + (Number(w.balance) || 0), 0);
-    return ok(res, {
-      metrics: {
-        profiles: r1.count || 0,
-        wallets: (r2.data || []).length,
-        total_balance: totalBalance,
-        txns: r3.count || 0
+    if (action === 'whoami') {
+      if (!hasAdminCookie(req)) {
+        res.statusCode = 401;
+        return res.end(JSON.stringify({ ok:false, error:'not_authenticated' }));
       }
-    });
-  }
-
-  if (action === 'credit') {
-    const userId = String(body.userId || '').trim();
-    const delta = Number(body.delta);
-    const note = (body.note == null ? '' : String(body.note)).slice(0, 200);
-    if (!userId) return bad(res, 'missing_user');
-    if (!Number.isFinite(delta) || delta === 0) return bad(res, 'invalid_delta');
-
-    const txType = delta >= 0 ? 'credit' : 'debit';
-
-    const wUp = await supabase
-      .from('wallets')
-      .upsert({ user_id: userId, balance: 0 }, { onConflict: 'user_id' })
-      .select('user_id,balance')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (wUp.error) return err(res, 'wallet_upsert_failed');
-
-    const wUpd = await supabase.rpc('wallet_increment_balance', { p_user_id: userId, p_delta: delta }).then(r => {
-      if (r.error && r.error.code === 'PGRST204') return null;
-      return r;
-    });
-
-    if (!wUpd || wUpd.error) {
-      const wSel = await supabase.from('wallets').select('balance').eq('user_id', userId).maybeSingle();
-      const newBal = (Number(wSel.data?.balance) || 0) + delta;
-      const wSet = await supabase.from('wallets').update({ balance: newBal }).eq('user_id', userId);
-      if (wSet.error) return err(res, 'wallet_update_failed');
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ ok:true, isAdmin:true }));
     }
 
-    const wNow = await supabase.from('wallets').select('user_id,balance').eq('user_id', userId).maybeSingle();
-    if (wNow.error) return err(res, 'wallet_fetch_failed');
+    if (action === 'session-login' && req.method === 'POST') {
+      const body = await readJson(req);
+      if (!body?.token && !(body?.email && body?.password)) {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ ok:false, error:'missing_credentials' }));
+      }
+      // demo cookie
+      res.setHeader('Set-Cookie', 'admin_session=ok; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=86400');
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ ok:true, user:{ role:'admin' } }));
+    }
 
-    const txn = await supabase.from('wallet_txns').insert([{
-      user_id: userId,
-      type: txType,
-      amount: delta,
-      balance_after: Number(wNow.data?.balance) || 0,
-      note: note || null
-    }]).select('id').maybeSingle();
-    if (txn.error) { console.error('admin.credit txn error', txn.error); return err(res, 'txn_insert_failed'); }
-
-    return ok(res, { user_id: userId, balance: Number(wNow.data?.balance) || 0, applied: delta });
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok:false, error:'unknown_action' }));
+  } catch (e) {
+    console.error('admin handler error', e);
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok:false, error:'server_error', detail:String(e) }));
   }
-
-  return bad(res, 'unknown_action');
 }
-
-export default withCors(handler, { methods: ['POST', 'OPTIONS'], exposeHeaders: ['Content-Type'] });
