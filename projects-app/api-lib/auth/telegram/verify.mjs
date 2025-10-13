@@ -1,6 +1,6 @@
-import { withCors } from '../../_lib/cors.mjs';
-import { verifyInitData } from '../../_lib/telegram.mjs';
-import { getSupabaseAdmin } from '../../_lib/supabaseClient.mjs';
+import { withCors } from '../../api/_lib/cors.mjs';
+import { verifyInitData } from '../../api/_lib/telegram.mjs';
+import { getSupabaseAdmin } from '../../api/_lib/supabaseClient.mjs';
 
 async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -111,4 +111,3 @@ async function parseJson(req) {
 }
 
 export default withCors(handler);
-

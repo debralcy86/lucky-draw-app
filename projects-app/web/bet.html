@@ -119,7 +119,7 @@
 
   <script type="module">
     import { getInitData } from "/web/_tg.js";
-  const OPEN_DRAW_API = "https://lucky-draw-web.vercel.app/api/open-draw";
+  const OPEN_DRAW_API = "https://projects-app-sepia.vercel.app/api/open-draw";
 
   function deriveGroupFromCode(code = "") {
     const m = String(code).match(/-(A|B|C|D)-/i);
@@ -273,7 +273,7 @@
     <div id="boardMeta" style="margin-top:8px;font-size:12px;opacity:.8;"></div>
 
     <script>
-      const SSE_BASE = 'https://lucky-draw-web.vercel.app/api/board-stream';
+      const SSE_BASE = 'https://projects-app-sepia.vercel.app/api/board-stream';
 
       function ensureGrid(groupId) {
         const el = document.getElementById('grid-' + groupId);

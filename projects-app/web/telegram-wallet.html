@@ -154,9 +154,9 @@
     let lastFetchedUserId = '';
 
     // Stable production API routes
-    const API_BASE = "https://lucky-draw-web.vercel.app/api/data-balance";
-    const ADMIN_API = "https://lucky-draw-web.vercel.app/api/admin-credit";
-    const WHOAMI_API = "https://lucky-draw-web.vercel.app/api/whoami";
+    const API_BASE = "https://projects-app-sepia.vercel.app/api/data-balance";
+    const ADMIN_API = "https://projects-app-sepia.vercel.app/api/admin-credit";
+    const WHOAMI_API = "https://projects-app-sepia.vercel.app/api/whoami";
     apiBaseLabel.textContent = API_BASE;
 
     const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
@@ -534,7 +534,7 @@
         // try same-origin first
         `${location.origin}/api/open-draw`,
         // then stable production domain
-        'https://lucky-draw-web.vercel.app/api/open-draw',
+        'https://projects-app-sepia.vercel.app/api/open-draw',
       ];
       let lastErr = '';
       for (const url of bases) {

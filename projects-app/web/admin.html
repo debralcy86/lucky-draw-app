@@ -77,7 +77,6 @@
   </header>
 
   <main>
-    <div id="tg-warning" style="display:none;padding:10px;border-radius:10px;margin:12px 0;background:#111827;color:#e6edf3">⚠️ Open this page <b>from Telegram</b> (via your bot’s WebApp button). No Telegram initData was detected.</div>
     <div id="tgDiag" style="position:sticky;top:0;z-index:9999;padding:8px;margin:8px 0;border-radius:6px;background:#111827;color:#e6edf3;font-size:12px;white-space:pre-wrap;box-shadow:0 2px 8px rgba(0,0,0,.25)">Awaiting Telegram SDK…</div>
     <pre id="whoamiDebug" class="mono" style="display:none;background:#111827;color:#e6edf3;padding:8px;border-radius:8px;max-height:200px;overflow:auto;margin:12px 0"></pre>
     <!-- OVERVIEW -->
@@ -247,7 +246,6 @@
     function showNoTelegramBanner(id = "tg-warning") {
       const el = document.getElementById(id);
       if (!el) return;
-      const inTG = !!(window?.Telegram?.WebApp?.initData);
       el.style.display = inTG ? "none" : "block";
     }
 
@@ -257,7 +255,6 @@
       try {
         const hasTG = !!window.Telegram;
         const hasWebApp = !!window.Telegram?.WebApp;
-        const raw = window.Telegram?.WebApp?.initData || '';
         const rawLen = raw.length;
         const viaHelper = await getInitData({ retries: 10, delayMs: 150 });
         const viaLen = (viaHelper || '').length;
@@ -267,9 +264,7 @@
           ua: navigator.userAgent,
           hasTelegram: hasTG,
           hasWebApp: hasWebApp,
-          initDataLen: rawLen,
           helperLen: viaLen,
-          initDataHead: raw.slice(0, 80)
         };
         box.textContent = JSON.stringify(info, null, 2);
       } catch (e) {
@@ -348,26 +343,21 @@
       try {
         // Try helper first, then raw Telegram object
         try { init = await getInitData({ retries: 6, delayMs: 150 }); } catch {}
-        if (!init && window?.Telegram?.WebApp?.initData) {
-          init = window.Telegram.WebApp.initData;
         }
 
         // Show banner if still missing
         if (!init) {
           showNoTelegramBanner && showNoTelegramBanner("tg-warning");
-          badge.textContent = "Access denied";
+          badge.textContent = "Web Admin Mode Activated";
           badge.classList.add("bad");
           return false;
         }
 
         // Save globally for subsequent calls
         INITDATA = init;
-        console.log("DEBUG initData", { len: INITDATA.length, head: INITDATA.slice(0, 60), rid: RID });
 
-        // Call whoami with timeout (no debug header echo of initData)
         const r = await postJSON(
           API.whoami,
-          { initData: INITDATA, rid: RID },
           { 'X-Debug-RID': RID, 'X-Request-Host': location.host },
           { timeoutMs: 8000 }
         );
@@ -381,14 +371,14 @@
         }
 
         // Not admin
-        badge.textContent = "Access denied";
+        badge.textContent = "Web Admin Mode Activated";
         badge.classList.add("bad");
         const pre = document.getElementById('ctlResult');
         if (pre) pre.textContent = JSON.stringify(r || { error: 'not_admin' }, null, 2);
         return false;
       } catch (e) {
         // Network / verify / other error
-        badge.textContent = "Access denied";
+        badge.textContent = "Web Admin Mode Activated";
         badge.classList.add("bad");
         const pre = document.getElementById('ctlResult');
         if (pre) {
@@ -397,8 +387,6 @@
             status: e?.status || 0,
             data: e?.data || null,
             rid: RID,
-            initData_len: INITDATA ? INITDATA.length : 0,
-            initData_head: INITDATA ? INITDATA.slice(0,40) : ''
           }, null, 2);
         }
         if (dbg) dbg.textContent = JSON.stringify({
@@ -406,8 +394,6 @@
           status: e?.status || 0,
           data: e?.data || null,
           rid: RID,
-          initData_len: INITDATA ? INITDATA.length : 0,
-          initData_head: INITDATA ? INITDATA.slice(0,40) : ''
         }, null, 2);
         return false;
       }
@@ -415,7 +401,6 @@
 
     // ---------- Overview KPIs ----------
     async function loadKPIs() {
-      const r = await postJSON(API.metrics, { initData: INITDATA });
       $("#kpiUsers").textContent = r.users ?? "—";
       $("#kpiBal").textContent = typeof r.total_balance === "number" ? r.total_balance.toFixed(2) : "—";
       if (r.open_draw) {
@@ -499,7 +484,6 @@
     async function callExec(action) {
       const group = $("#ctlGroup").value;
       const force = Number($("#ctlForce").value || "");
-      const body = { initData: INITDATA, action, group };
       if (!Number.isNaN(force) && force>=1 && force<=36) body.force = force;
 
       const res = await fetch(API.exec, {
@@ -553,7 +537,6 @@
     }
     async function loadTxns(reset=true) {
       if (reset) { TXN_OFFSET = 0; TXN_LAST = []; }
-      const r = await postJSON(API.txns, { initData: INITDATA, offset: TXN_OFFSET, limit: TXN_LIMIT });
       TXN_LAST = r.txns || [];
       const view = filterTxns(TXN_LAST);
       renderTxns(view, !reset);
@@ -594,7 +577,6 @@
       try {
         const btns = [...document.querySelectorAll(`button[data-id="${id}"]`)];
         btns.forEach(b => { b.disabled = true; b.textContent = (action==='approve'?'Approving…':'Rejecting…'); });
-        const res = await postJSON(API.withdrawUpdate, { initData: INITDATA, id, action });
         if (res?.ok) {
           toast(`Withdraw ${action}d`, 'ok');
           await loadWithdraws(true);
@@ -623,7 +605,6 @@
     async function loadWithdraws(reset=true) {
       if (reset) { WD_OFFSET = 0; WD_LAST = []; }
       const status = $("#wdStatus").value || "pending";
-      const r = await postJSON(API.withdraws, { initData: INITDATA, status, limit: WD_LIMIT, offset: WD_OFFSET });
       const rows = Array.isArray(r.rows) ? r.rows : [];
       WD_LAST = rows;
       renderWithdraws(rows, !reset);
@@ -698,3 +679,4 @@
 </script>
 </body>
 </html>
+<span class="version-tag">v20251013-admin</span><script>console.log("TAG: admin-web-20251013");</script>

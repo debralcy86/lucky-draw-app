@@ -1,5 +1,13 @@
 {
   "version": 2,
+  "functions": {
+    "projects-app/api/**/*.js": {
+      "runtime": "nodejs20.x"
+    },
+    "projects-app/api/**/*.mjs": {
+      "runtime": "nodejs20.x"
+    }
+  },
   "installCommand": "npm ci --prefix projects-app || npm install --prefix projects-app",
   "buildCommand": "CI= npm run build --prefix projects-app",
   "outputDirectory": "projects-app/build",

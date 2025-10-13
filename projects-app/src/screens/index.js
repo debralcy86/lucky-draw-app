@@ -123,7 +123,15 @@ export function getInitData() {
     const fromHash = hash.startsWith('#') ? new URLSearchParams(hash.slice(1)).get('tgWebAppData') : null;
     const fromSearch = search ? new URLSearchParams(search).get('tgWebAppData') : null;
     const fromTG = (hasWin && window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp.initData : '';
-    return fromHash || fromSearch || fromTG || '';
+    let fromStorage = '';
+    if (hasWin) {
+      try {
+        fromStorage = window.localStorage?.getItem('LD_initData') || '';
+      } catch (_) {
+        fromStorage = '';
+      }
+    }
+    return fromHash || fromSearch || fromTG || fromStorage || '';
   } catch (_) {
     return '';
   }
@@ -147,6 +155,16 @@ function safeTrim(value) {
   if (typeof value === 'string') return value.trim();
   if (value == null) return '';
   return String(value).trim();
+}
+
+function isDepositTxnType(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'credit' || value === 'deposit_pending';
+}
+
+function isWithdrawTxnType(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'debit' || value === 'withdraw_pending';
 }
 
 // --- end helper ---
@@ -301,6 +319,9 @@ export function LoginScreen({ onNavigate, debug = false }) {
       setStatusMessage('Verifying your Telegram account...');
       setErrorMessage('');
       const initDataUserId = parseTelegramUserId(initData);
+      if (initData) {
+        try { localStorage.setItem('LD_initData', initData); } catch {}
+      }
 
       try {
         const res = await fetch('/api/profile', {
@@ -369,6 +390,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
             contact: profileForAuth?.contact || '',
             status: exists ? 'verified' : 'pending',
             profile: profileForAuth,
+            initData,
           });
         }
 
@@ -436,6 +458,9 @@ export function LoginScreen({ onNavigate, debug = false }) {
     if (verifying || saving) return;
 
     const initData = getInitData();
+    if (initData) {
+      try { localStorage.setItem('LD_initData', initData); } catch {}
+    }
     if (!initData) {
       console.log('[Telegram] initData missing — open this inside Telegram WebApp.');
       alert('Open inside Telegram to continue (initData missing).');
@@ -478,6 +503,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
         name: trimmedName || name || '',
         contact: trimmedContact || contact || '',
         status: 'verified',
+        initData,
         profile: {
           user_id: actualUserId,
           name: trimmedName || name || '',
@@ -524,6 +550,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
       name: savedProfile?.name || trimmedName,
       contact: savedProfile?.contact || trimmedContact,
       status: 'registered',
+      initData,
       profile: savedProfile,
     });
     if (savedWallet) {
@@ -664,7 +691,7 @@ export function DashboardScreen({ onNavigate, debug = false }) {
   const balance = state?.wallet?.balance ?? 0;
   useEffect(() => {
     let active = true;
-    const initData = getInitData();
+    const initData = (getInitData() || state?.auth?.initData || '').trim();
     if (!initData) return () => { active = false; };
     (async () => {
       try {
@@ -686,7 +713,7 @@ export function DashboardScreen({ onNavigate, debug = false }) {
       }
     })();
     return () => { active = false; };
-  }, [debug, setWalletData, state?.auth?.userId]);
+  }, [debug, setWalletData, state?.auth?.userId, state?.auth?.initData]);
   const hotspots = [
     {
       ...( // preserve key/title/kind if present
@@ -1043,55 +1070,106 @@ export function ConfirmScreen({ onNavigate, params, debug = false }) {
 }
 
 export function DepositScreen({ onNavigate, debug = false }) {
-  const { credit } = useAppState();
+  const { state, setWalletData } = useAppState();
   const [edit, setEdit] = useState(false);
   const [amount, setAmount] = useState(50);
   const [note, setNote] = useState('');
   const [uploadSlip, setUploadSlip] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const normalizedAmount = Math.max(0, Math.floor(Number(amount) || 0));
   const canSubmit = normalizedAmount > 0;
 
   const handleDeposit = async () => {
+    if (submitting) return;
     if (!canSubmit) {
       alert('Enter a deposit amount greater than zero.');
       return;
     }
-    const initData = getInitData();
+    const initData = (getInitData() || state?.auth?.initData || '').trim();
     if (!initData) {
       alert('Open inside Telegram to continue (initData missing).');
       return;
     }
+    setSubmitting(true);
     try {
-      const res = await fetch('/api/wallet', {
+      const res = await fetch('/api/deposit-create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'tma ' + initData,
         },
         body: JSON.stringify({
-          action: 'deposit',
           amount: normalizedAmount,
           method: 'bank',
-          ref: note || 'TMA',
-          slip_url: uploadSlip || undefined,
+          ref: note || '',
+          note: note || '',
+          slipUrl: uploadSlip || undefined,
+          initData,
         }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const msg = json?.error || json?.reason || `Deposit failed (${res.status})`;
+        const msg = json?.error || json?.reason || json?.details || `Deposit failed (${res.status})`;
         alert(msg);
         return;
       }
-      // Optimistic local state update as fallback (credit is from appState)
-      try { credit(normalizedAmount); } catch {}
-      alert(`Deposit recorded for ${normalizedAmount} pts.`);
+      const walletRow = json?.wallet;
+      const txnRow = json?.txn;
+      if (walletRow || txnRow) {
+        const currentWallet = state?.wallet || {};
+        const nextWallet = { ...currentWallet };
+        if (walletRow && walletRow.balance != null) {
+          nextWallet.balance = Number(walletRow.balance);
+        }
+        if (walletRow && walletRow.userId) {
+          nextWallet.userId = String(walletRow.userId);
+        }
+        if (walletRow && walletRow.user_id) {
+          nextWallet.userId = String(walletRow.user_id);
+        }
+        const existingTxns = Array.isArray(state?.walletTxns) ? state.walletTxns : [];
+        let nextTxns = existingTxns;
+        if (txnRow) {
+          const createdAt = txnRow.createdAt || txnRow.created_at || new Date().toISOString();
+          const balanceAfter =
+            txnRow.balanceAfter != null
+              ? Number(txnRow.balanceAfter)
+              : (txnRow.balance_after != null ? Number(txnRow.balance_after) : Number(nextWallet.balance ?? 0));
+          const mappedTxn = {
+            id: String(txnRow.id || `deposit_${Date.now()}`),
+            userId: String(txnRow.userId || txnRow.user_id || state?.auth?.userId || ''),
+            type: txnRow.type || 'deposit_pending',
+            amount: Number(txnRow.amount ?? normalizedAmount),
+            balanceAfter,
+            balance_after: balanceAfter,
+            note: txnRow.note || note || 'deposit request',
+            createdAt,
+            created_at: createdAt,
+            source: 'deposit-create',
+          };
+          nextTxns = [mappedTxn, ...existingTxns];
+        }
+        try {
+          setWalletData({ wallet: nextWallet, txns: nextTxns });
+        } catch (e) {
+          if (debug) {
+            console.log('deposit:setWalletData error', e);
+          }
+        }
+      }
+      const requestId = json?.request?.id;
+      alert(requestId
+        ? `Deposit request recorded. Reference ID: ${requestId}.`
+        : `Deposit request recorded for ${normalizedAmount} pts.`);
       setNote('');
       setUploadSlip('');
       onNavigate('dashboard');
     } catch (e) {
       console.log('Deposit error:', e);
       alert('Network error while creating deposit. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1149,7 +1227,7 @@ export function DepositScreen({ onNavigate, debug = false }) {
       top: '57.31%',
       width: '91.52%',
       height: '8.00%',
-      onClick: handleDeposit,
+      onClick: (!submitting && canSubmit) ? handleDeposit : undefined,
     },
   ];
 
@@ -1246,7 +1324,7 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       alert('Select a withdrawal destination from your profile setup.');
       return;
     }
-    const initData = getInitData();
+    const initData = (getInitData() || state?.auth?.initData || '').trim();
     if (!initData) {
       alert('Open inside Telegram to continue (initData missing).');
       return;
@@ -1385,13 +1463,14 @@ export function HistoryScreen({ onNavigate, debug = false }) {
 
   const historyRows = useMemo(() => {
     const mappedTxns = txns.map((t) => {
-      const typeLower = (t.note || '').toLowerCase();
+      const noteLower = (t.note || '').toLowerCase();
+      const typeLower = String(t.type || '').toLowerCase();
       let label = 'Transaction';
-      if (t.type === 'bet') label = 'Bet';
-      else if (t.type === 'credit') label = typeLower.includes('win') ? 'Win' : 'Deposit';
-      else if (t.type === 'debit') label = 'Withdraw';
+      if (typeLower === 'bet') label = 'Bet';
+      else if (isDepositTxnType(typeLower)) label = noteLower.includes('win') ? 'Win' : 'Deposit';
+      else if (isWithdrawTxnType(typeLower)) label = 'Withdraw';
       const rawAmount = Number(t.amount) || 0;
-      const isNegative = t.type === 'debit' || t.type === 'bet';
+      const isNegative = isWithdrawTxnType(typeLower) || typeLower === 'bet';
       const signedAmount = isNegative ? -Math.abs(rawAmount) : Math.abs(rawAmount);
       return {
         id: `txn-${t.id}`,
@@ -1824,9 +1903,9 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
 
   const filteredTxns = useMemo(() => {
     if (!filterValue) return walletTxns;
-    if (filterValue === 'deposit') return walletTxns.filter((t) => t.type === 'credit');
-    if (filterValue === 'withdrawal') return walletTxns.filter((t) => t.type === 'debit');
-    if (filterValue === 'bet') return walletTxns.filter((t) => t.type === 'bet');
+    if (filterValue === 'deposit') return walletTxns.filter((t) => isDepositTxnType(t.type));
+    if (filterValue === 'withdrawal') return walletTxns.filter((t) => isWithdrawTxnType(t.type));
+    if (filterValue === 'bet') return walletTxns.filter((t) => String(t.type || '').toLowerCase() === 'bet');
     return walletTxns;
   }, [walletTxns, filterValue]);
 
@@ -1834,13 +1913,14 @@ export function AdminPointsTrackingScreen({ onNavigate, debug = false }) {
   const rows = useMemo(
     () =>
       filteredTxns.slice(0, maxDisplayRows).map((t) => {
-        const typeLower = (t.note || '').toLowerCase();
+        const noteLower = (t.note || '').toLowerCase();
+        const typeLower = String(t.type || '').toLowerCase();
         let txnLabel = 'Transaction';
-        if (t.type === 'bet') txnLabel = 'Bet';
-        else if (t.type === 'credit') txnLabel = typeLower.includes('win') ? 'Win' : 'Deposit';
-        else if (t.type === 'debit') txnLabel = 'Withdraw';
+        if (typeLower === 'bet') txnLabel = 'Bet';
+        else if (isDepositTxnType(typeLower)) txnLabel = noteLower.includes('win') ? 'Win' : 'Deposit';
+        else if (isWithdrawTxnType(typeLower)) txnLabel = 'Withdraw';
         const rawAmount = Number(t.amount) || 0;
-        const isNegative = t.type === 'debit' || t.type === 'bet';
+        const isNegative = isWithdrawTxnType(typeLower) || typeLower === 'bet';
         const signedAmount = isNegative ? -Math.abs(rawAmount) : Math.abs(rawAmount);
         return {
           id: t.id,
