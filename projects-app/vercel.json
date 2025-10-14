@@ -1,7 +1,9 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
+  "functions": { "api/router.js": { "maxDuration": 10 } },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/router.js" },
     { "source": "/admin", "destination": "/admin/dist/index.html" },
     { "source": "/admin/(.*)", "destination": "/admin/dist/index.html" }
   ]
