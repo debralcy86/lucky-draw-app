@@ -1,97 +1,56 @@
-const isObject = (value) => value && typeof value === 'object';
+import { validate, parse } from '@telegram-apps/init-data-node';
 
-function normalize(value) {
-  return typeof value === 'string' ? value.trim() : '';
+export async function readJson(req) {
+  if (req.body && typeof req.body === 'object') return req.body;
+  let data = '';
+  for await (const chunk of req) data += chunk;
+  try { return data ? JSON.parse(data) : {}; } catch { return {}; }
 }
 
-function fromBodyMaybe(body) {
-  if (!body) return '';
+export async function extractInitData(req) {
+  const h = req.headers || {};
+  const auth = String(h.authorization || h.Authorization || '');
+  if (auth.startsWith('tma ')) return auth.slice(4).trim();
 
-  if (typeof body === 'string') {
-    const trimmed = body.trim();
-    if (!trimmed) return '';
-    try {
-      const parsed = JSON.parse(trimmed);
-      const fromParsed = fromBodyMaybe(parsed);
-      if (fromParsed) return fromParsed;
-    } catch {
-      return trimmed;
-    }
-    return trimmed;
+  let init = '';
+  if (req.method === 'POST') {
+    const body = await readJson(req);
+    init = body && typeof body.initData === 'string' ? body.initData : '';
+    if (init) return init;
+    req.body = body;
   }
 
-  if (Buffer.isBuffer(body)) {
-    const text = body.toString('utf8').trim();
-    if (!text) return '';
-    try {
-      const parsed = JSON.parse(text);
-      const fromParsed = fromBodyMaybe(parsed);
-      if (fromParsed) return fromParsed;
-    } catch {
-      return text;
-    }
-    return text;
-  }
-
-  if (!isObject(body)) return '';
-
-  const directKeys = [
-    'initData',
-    'initdata',
-    'init_data',
-    'tgWebAppData',
-    'tma',
-    'authorization',
-    'auth',
-    'token',
-  ];
-
-  for (const key of directKeys) {
-    const value = body[key];
-    if (typeof value === 'string' && value.trim()) {
-      const trimmed = value.trim();
-      if (key === 'authorization' || key === 'auth' || key === 'token') {
-        if (trimmed.startsWith('tma ')) {
-          return trimmed.slice(4).trim();
-        }
-      }
-      return trimmed;
-    }
-  }
-
-  if (typeof body.headers === 'object' && body.headers !== null) {
-    const nested = fromBodyMaybe(body.headers);
-    if (nested) return nested;
-  }
-
-  if (typeof body.payload === 'string' && body.payload.includes('auth_date')) {
-    return body.payload.trim();
-  }
-
-  if (typeof body.telegram === 'object' && body.telegram !== null) {
-    const nested = fromBodyMaybe(body.telegram);
-    if (nested) return nested;
-  }
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    const q = url.searchParams.get('initData');
+    if (q) return q;
+  } catch {}
 
   return '';
 }
 
-export function extractInitData(req, bodyOverride) {
-  const headers = req?.headers || {};
-  const authHeader = normalize(headers.authorization || headers.Authorization || '');
-  const fromHeader = authHeader.startsWith('tma ') ? authHeader.slice(4).trim() : '';
-
-  const telegramHeader =
-    normalize(headers['x-telegram-initdata'] || headers['x-telegram-init-data'] || headers['x-telegram-auth']);
-
-  const queryInit =
-    typeof req?.query?.initData === 'string'
-      ? req.query.initData.trim()
-      : (typeof req?.query?.tgWebAppData === 'string' ? req.query.tgWebAppData.trim() : '');
-
-  const bodySource = fromBodyMaybe(bodyOverride !== undefined ? bodyOverride : req?.body);
-
-  return fromHeader || bodySource || telegramHeader || queryInit || '';
+export function verifyTma(initData, botToken) {
+  if (!initData) return { ok: false, error: 'missing_init_data' };
+  if (!botToken) return { ok: false, error: 'missing_bot_token' };
+  try {
+    validate(initData, botToken);
+    const data = parse(initData);
+    const userId = data && data.user && data.user.id ? String(data.user.id) : '';
+    if (!userId) return { ok: false, error: 'no_user_in_initdata' };
+    return { ok: true, userId, data };
+  } catch (e) {
+    return { ok: false, error: 'invalid_init_data', detail: String(e && e.message || e) };
+  }
 }
 
-export default extractInitData;
+export async function requireTma(req, res) {
+  const initData = await extractInitData(req);
+  const v = verifyTma(initData, process.env.TELEGRAM_BOT_TOKEN);
+  if (!v.ok) {
+    res.statusCode = 401;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok:false, error:v.error, detail:v.detail || null }));
+    return null;
+  }
+  return { initData, userId: v.userId, tma: v.data };
+}
