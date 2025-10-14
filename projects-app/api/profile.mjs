@@ -1,7 +1,7 @@
 export const config = { runtime: 'nodejs' };
 
 import { createClient } from '@supabase/supabase-js';
-import verifyInitData, { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
+import { withTMA } from './_lib/tma.mjs';
 import { hashPin } from './_lib/pin.js';
 
 const ALLOW_HEADERS = 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID';
@@ -38,13 +38,6 @@ async function readJsonBody(req) {
   }
 }
 
-function getInitData(req, body) {
-  const auth = (req.headers?.authorization || req.headers?.Authorization || '').toString();
-  const fromHeader = auth.startsWith('tma ') ? auth.slice(4).trim() : '';
-  const fromBody = typeof body.initData === 'string' ? body.initData.trim() : '';
-  return fromBody || fromHeader;
-}
-
 function sanitizeProfilePayload(input = {}) {
   const out = {};
   if (typeof input.name === 'string') out.name = input.name.trim();
@@ -78,7 +71,7 @@ function maskProfileRow(row) {
 }
 
 
-export default async function profile(req, res) {
+async function profile(req, res) {
   const requestId = rid();
   const allowOrigin = String(process.env.CORS_ORIGIN || '*')
     .replace(/[\r\n]/g, ' ')
@@ -97,40 +90,22 @@ export default async function profile(req, res) {
     return send(res, 405, { ok: false, error: 'Method Not Allowed', rid: requestId });
   }
 
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } = process.env;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !TELEGRAM_BOT_TOKEN) {
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return send(res, 500, { ok: false, error: 'Missing server configuration', rid: requestId });
   }
 
   try {
     const body = await readJsonBody(req);
-    const initData = getInitData(req, body);
-    if (!initData) {
-      return send(res, 400, { ok: false, error: 'Missing initData', rid: requestId });
-    }
 
-    const check = verifyTelegramInitData(initData, TELEGRAM_BOT_TOKEN) || verifyInitData(initData, TELEGRAM_BOT_TOKEN);
-    if (!check?.ok) {
-      return send(res, 401, { ok: false, error: check?.error || 'Invalid Telegram session', rid: requestId });
-    }
-
-    const payload = check?.payload || check?.params || {};
-    const verifiedUser = check?.user || {};
-    const userIdRaw = check?.userId || verifiedUser?.id || verifiedUser?.user?.id;
-    const authDateRaw = payload?.auth_date || payload?.authDate;
-
-    const userId = userIdRaw ? String(userIdRaw) : '';
-    const authDate = Number(authDateRaw || 0);
-
-    if (!userId || !Number.isFinite(authDate) || authDate <= 0) {
-      return send(res, 400, { ok: false, error: 'Missing required Telegram fields', rid: requestId });
+    const userId = req.tma?.userId ? String(req.tma.userId) : '';
+    if (!userId) {
+      return send(res, 401, { ok: false, error: 'invalid_init_data', rid: requestId });
     }
 
     console.log('profile_request', {
       rid: requestId,
-      init_len: initData.length,
       user_id: userId,
-      auth_date: authDate,
     });
 
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -253,3 +228,5 @@ export default async function profile(req, res) {
     return send(res, 500, { ok: false, error: 'Server error', rid: requestId });
   }
 }
+
+export default withTMA(profile);
