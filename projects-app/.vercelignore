@@ -1,0 +1,7 @@
+api/*.bak*
+api/*.old*
+api/*.backup*
+api/*.tmp
+api/*.orig
+api/*~
+api/*.swp

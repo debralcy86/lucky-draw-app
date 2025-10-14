@@ -19,3 +19,10 @@ yarn-debug.log*
 yarn-error.log*
 .vercel
 .env*.local
+api/*.bak*
+api/*.old*
+api/*.backup*
+api/*.tmp
+api/*.orig
+api/*~
+api/*.swp
