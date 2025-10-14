@@ -1,8 +1,10 @@
 {
   "rewrites": [
-    { "source": "/api/login",           "destination": "/api/auth.mjs" },
-    { "source": "/api/register",        "destination": "/api/auth.mjs" },
-    { "source": "/api/admin-metrics",   "destination": "/api/admin.mjs" },
-    { "source": "/api/admin-draw-exec", "destination": "/api/admin.mjs" }
+    { "source": "/api/login",                      "destination": "/api/auth.mjs" },
+    { "source": "/api/register",                   "destination": "/api/auth.mjs" },
+    { "source": "/api/admin-metrics",              "destination": "/api/admin.mjs" },
+    { "source": "/api/admin-draw-exec",            "destination": "/api/admin.mjs" },
+    { "source": "/api/profile/reset-pin-request",  "destination": "/api/profile.mjs" },
+    { "source": "/api/profile/reset-pin-confirm",  "destination": "/api/profile.mjs" }
   ]
 }
