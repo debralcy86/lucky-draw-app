@@ -1,11 +1,10 @@
 // wallet/v2 – REST-only
 export const config = { runtime: 'nodejs' };
 
-import verifyInitData from './_lib/telegramVerify.mjs';
+import { withTMA } from './_lib/tma.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BET_GROUPS = ['A', 'B', 'C', 'D'];
 const PAYMENT_METHODS = ['bank', 'ewallet', 'agent'];
 const WITHDRAW_STATUSES = ['pending', 'approved', 'rejected', 'paid'];
@@ -164,36 +163,14 @@ async function ensureWallet(userId) {
   return row;
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const origin = req.headers.origin || '*';
   if (req.method === 'OPTIONS') return ok(res, { ok: true }, origin);
   if (req.method !== 'POST') return err(res, 405, 'method_not_allowed', origin);
 
-  const auth = req.headers.authorization || '';
-  const tma = auth.startsWith('tma ') ? auth.slice(4) : '';
-  if (!tma) return err(res, 400, 'missing_tma_or_admin_token', origin);
-
-  if (!TELEGRAM_BOT_TOKEN) {
-    return err(res, 500, 'missing_bot_token', origin);
-  }
-
-  let validation;
-  try {
-    validation = verifyInitData(tma, TELEGRAM_BOT_TOKEN);
-  } catch (error) {
-    console.error('[wallet] verifyInitData crash', error);
-    return err(res, 400, 'tma_invalid', origin);
-  }
-
-  if (!validation?.ok) {
-    console.warn('[wallet] initData rejected', validation);
-    return err(res, 401, 'tma_invalid', origin);
-  }
-
-  const userId = String(validation.userId || validation.user?.id || '');
+  const userId = req.tma?.userId ? String(req.tma.userId) : '';
   if (!userId) {
-    console.warn('[wallet] missing userId after verification');
-    return err(res, 400, 'missing_user_id', origin);
+    return err(res, 401, 'invalid_init_data', origin);
   }
 
   let body;
@@ -332,44 +309,6 @@ export default async function handler(req, res) {
       return ok(res, { ok: true, action: 'withdraw', balance: current?.balance ?? nextBalance }, origin);
     }
 
-    if (action === 'withdraw_update') {
-      // Only admins can update withdraw requests
-      const isAdmin = process.env.ADMIN_USER_IDS && process.env.ADMIN_USER_IDS.split(',').includes(userId);
-      if (!isAdmin) {
-        return err(res, 403, 'admin_required', origin);
-      }
-
-      const rid = String(body.rid || '');
-      const status = String(body.status || 'pending');
-      const admin_note = body.admin_note || null;
-      const approved_by = userId;
-      const paid_by = body.paid_by || null;
-      const paid_ref = body.paid_ref || null;
-
-      if (!rid) {
-        return err(res, 400, 'missing_rid', origin);
-      }
-
-      const updReq = await sfetch(`/withdraw_requests?rid=eq.${encodeURIComponent(rid)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status,
-          admin_note,
-          approved_by,
-          paid_by,
-          paid_ref,
-          updated_at: new Date().toISOString(),
-        }),
-      });
-
-      if (!updReq.ok) {
-        const text = await updReq.text().catch(() => '');
-        console.error('[wallet] withdraw_update_failed', { status: updReq.status, body: text });
-        return err(res, 500, 'withdraw_update_failed', origin);
-      }
-
-      return ok(res, { ok: true, action: 'withdraw_update', rid, status }, origin);
-    }
 
     if (action === 'bet') {
       const bets = sanitizeBetEntries(body?.bets);
@@ -555,3 +494,4 @@ export default async function handler(req, res) {
     return err(res, 500, 'server_error', origin);
   }
 }
+export default withTMA(handler);

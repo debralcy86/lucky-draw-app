@@ -1,8 +1,7 @@
 export const config = { runtime: 'nodejs' };
 
 import { Buffer } from 'node:buffer';
-import { validate, parse } from '@telegram-apps/init-data-node';
-import { withCors } from './_lib/cors.mjs';
+import { withTMA } from './_lib/tma.mjs';
 import {
   createServiceClient,
   ensureWallet,
@@ -35,33 +34,14 @@ async function handler(req, res) {
     return send(res, 500, { ok: false, rid: requestId, error: 'Missing Supabase credentials', details: e.message });
   }
 
-  const adminToken = process.env.ADMIN_TOKEN;
-
   try {
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://localhost');
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') || 20)));
       const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
-
-      const authHeader = req.headers.authorization || req.headers.Authorization || '';
-      if (!authHeader.startsWith('tma ')) {
-        return send(res, 401, { ok: false, rid: requestId, error: 'missing_tma_header' });
-      }
-      const initData = authHeader.slice(4);
-      try {
-        validate(initData, process.env.TELEGRAM_BOT_TOKEN);
-      } catch (e) {
-        return send(res, 401, { ok: false, rid: requestId, error: 'invalid_init_data' });
-      }
-      let parsed;
-      try {
-        parsed = parse(initData);
-      } catch (e) {
-        return send(res, 400, { ok: false, rid: requestId, error: 'parse_failed' });
-      }
-      const userId = parsed?.user?.id ? String(parsed.user.id) : '';
+      const userId = req.tma?.userId || '';
       if (!userId) {
-        return send(res, 401, { ok: false, rid: requestId, error: 'no_user_in_initdata' });
+        return send(res, 401, { ok: false, rid: requestId, error: 'invalid_init_data' });
       }
 
       const ensured = await ensureWallet(supabase, userId);
@@ -128,7 +108,7 @@ async function handler(req, res) {
 
       return send(res, 200, {
         ok: true,
-        tag: 'data-balance/v1.1-tma-verify-2025-09-28',
+        tag: 'data-balance/v2.0-standardized-2025-10-14',
         rid: requestId,
         wallet,
         txns: txns ?? [],
@@ -139,31 +119,13 @@ async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      let isAuthorized = false;
-      if (adminToken && req.headers['x-admin-token'] === adminToken) {
-        isAuthorized = true;
-      } else {
-        const authHeader = req.headers.authorization || req.headers.Authorization || '';
-        if (authHeader.startsWith('tma ')) {
-          const initData = authHeader.slice(4);
-          try {
-            validate(initData, process.env.TELEGRAM_BOT_TOKEN);
-            const parsed = parse(initData);
-            const uid = parsed?.user?.id ? String(parsed.user.id) : '';
-            const adminList = (process.env.ADMIN_USER_IDS || '')
-              .split(',')
-              .map(s => s.trim())
-              .filter(Boolean);
-            if (uid && adminList.includes(uid)) {
-              isAuthorized = true;
-            }
-          } catch (_) {
-            // fallthrough: not authorized
-          }
-        }
-      }
-      if (!isAuthorized) {
-        return send(res, 401, { ok: false, rid: requestId, error: 'Unauthorized' });
+      const tma = req.tma || {};
+      const isAdmin = !!tma.isAdmin;
+      const adminToken = process.env.ADMIN_TOKEN;
+      const adminHeader = req.headers['x-admin-token'];
+      const hasAdminByToken = adminToken && adminHeader === adminToken;
+      if (!isAdmin && !hasAdminByToken) {
+        return send(res, 403, { ok: false, rid: requestId, error: 'not_admin' });
       }
 
       const body = await readJson(req);
@@ -200,7 +162,7 @@ async function handler(req, res) {
 
       return send(res, 200, {
         ok: true,
-        tag: 'data-balance/v1.1-tma-verify-2025-09-28',
+        tag: 'data-balance/v2.0-standardized-2025-10-14',
         rid: requestId,
         balance: deltaResult.balance,
       });
@@ -217,7 +179,7 @@ async function handler(req, res) {
   }
 }
 
-export default withCors(handler);
+export default withTMA(handler);
 
 async function readJson(req) {
   if (req.body && typeof req.body === 'object') return req.body;

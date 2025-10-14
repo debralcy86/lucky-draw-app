@@ -2,8 +2,7 @@ export const config = { runtime: 'nodejs' };
 
 import { Buffer } from 'node:buffer';
 import { createServiceClient, fetchWallet, adjustWalletBalance } from './_lib/wallet.js';
-import verifyInitData from './_lib/telegramVerify.mjs';
-import { withCors } from './_lib/cors.mjs';
+import { withTMA } from './_lib/tma.mjs';
 
 const GROUP_CODES = ['A', 'B', 'C', 'D'];
 
@@ -95,12 +94,8 @@ async function handler(req, res) {
   let supabase;
   try { supabase = createServiceClient(); } catch { return err(res, 'server_misconfig'); }
 
-  const auth = req.headers.authorization || '';
-  if (!auth.startsWith('tma ')) return bad(res, 'missing_tma');
-  const initData = auth.slice(4);
-  const verify = verifyInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
-  if (!verify.ok) return bad(res, 'invalid_tma');
-  const userId = verify.userId;
+  const userId = req.tma?.userId ? String(req.tma.userId) : '';
+  if (!userId) return bad(res, 'invalid_tma');
 
   const body = await readJSON(req);
   let { drawId, figure, amount, group } = body || {};
@@ -160,4 +155,4 @@ async function handler(req, res) {
   return ok(res, { rid: rid(), bet: betOut, balance: debit.balance, draw });
 }
 
-export default withCors(handler, { methods: ['POST', 'OPTIONS'] });
+export default withTMA(handler);

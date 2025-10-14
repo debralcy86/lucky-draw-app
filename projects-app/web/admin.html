@@ -365,7 +365,42 @@
     }
     let DEP_LOADED = false;
     let REP_LOADED = false;
-    const setTab = id => {
+
+    const TAB_IDS = ["overview", "draws", "txns", "withdraws", "deposits", "reports"];
+    const HASH_ALIAS = {
+      "": "overview",
+      "#": "overview",
+      overview: "overview",
+      dashboard: "overview",
+      admin: "overview",
+      draws: "draws",
+      figures: "draws",
+      results: "draws",
+      txns: "txns",
+      transactions: "txns",
+      points: "txns",
+      withdraws: "withdraws",
+      users: "withdraws",
+      deposits: "deposits",
+      reports: "reports"
+    };
+
+    function normalizeTab(raw) {
+      const key = String(raw || "")
+        .replace(/^#/, "")
+        .trim()
+        .toLowerCase();
+      return TAB_IDS.includes(key) ? key : (HASH_ALIAS[key] || "overview");
+    }
+
+    const setTab = (rawId, { updateHash = true } = {}) => {
+      const id = normalizeTab(rawId);
+      if (updateHash && typeof history.replaceState === "function") {
+        const desiredHash = `#${id}`;
+        if (location.hash !== desiredHash) {
+          history.replaceState(null, "", desiredHash);
+        }
+      }
       $all(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === id));
       $("#panel-overview").style.display = id==="overview"?"block":"none";
       $("#panel-draws").style.display = id==="draws"?"block":"none";
@@ -373,19 +408,37 @@
       $("#panel-withdraws").style.display = id==="withdraws"?"block":"none";
       $("#panel-deposits").style.display = id==="deposits"?"block":"none";
       $("#panel-reports").style.display = id==="reports"?"block":"none";
-    };  
-    $all(".tab").forEach(b => b.addEventListener("click", () => {
-      const tab = b.dataset.tab;
-      setTab(tab);
-      if (tab === 'deposits' && !DEP_LOADED) {
+      return id;
+    };
+
+    function applyHash() {
+      const id = normalizeTab(location.hash);
+      const active = setTab(id, { updateHash: false });
+      if (active === 'deposits' && !DEP_LOADED) {
         DEP_LOADED = true;
         if (typeof loadDeposits === 'function') loadDeposits(true);
       }
-      if (tab === 'reports' && !REP_LOADED) {
+      if (active === 'reports' && !REP_LOADED) {
+        REP_LOADED = true;
+        if (typeof loadReport === 'function') loadReport();
+      }
+    }
+
+    $all(".tab").forEach(b => b.addEventListener("click", () => {
+      const tab = b.dataset.tab;
+      const active = setTab(tab);
+      if (active === 'deposits' && !DEP_LOADED) {
+        DEP_LOADED = true;
+        if (typeof loadDeposits === 'function') loadDeposits(true);
+      }
+      if (active === 'reports' && !REP_LOADED) {
         REP_LOADED = true;
         if (typeof loadReport === 'function') loadReport();
       }
     }));
+
+    window.addEventListener("hashchange", applyHash);
+    applyHash();
 
     // ---------- Admin Gate ----------
     let ADMIN = false;

@@ -29,6 +29,8 @@ import PngAdminFigures from '../assets/figma/12_Admin_Figures_Data.png';
 import PngAdminResults from '../assets/figma/13_Admin_Result_Posting.png';
 import PngAdminReports from '../assets/figma/14_Admin_Reports.png'
 
+const ADMIN_PORTAL_PATH = '/web/admin.html';
+
 // Telegram bot wiring (centralized)
 // You can override at runtime by setting window.__BOT_USERNAME__ = 'LuckyDrawForUBot'
 const BOT_USERNAME = (typeof window !== 'undefined' && window.__BOT_USERNAME__) || 'LuckyDrawForUBot';
@@ -2336,8 +2338,84 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
           <button onClick={() => setEdit(v => !v)}>{edit ? 'Done Tagging' : 'Edit hotspots'}</button>
         </div>
       </div>
-    );
-  }
+  );
+}
+
+function AdminPortalRedirectScreen({ onNavigate, screenName }) {
+  const hasNavigate = typeof onNavigate === 'function';
+  const redirectFlag = useRef(false);
+
+  const adminUrl = useMemo(() => {
+    const fallback = screenName ? `${ADMIN_PORTAL_PATH}#${screenName}` : ADMIN_PORTAL_PATH;
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const target = new URL(ADMIN_PORTAL_PATH, window.location.origin);
+      if (screenName) {
+        target.hash = screenName;
+      }
+      return target.toString();
+    } catch (_) {
+      return fallback;
+    }
+  }, [screenName]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (redirectFlag.current) return;
+    redirectFlag.current = true;
+    window.location.assign(adminUrl);
+  }, [adminUrl]);
+
+  const handleOpenPortal = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.location.assign(adminUrl);
+    }
+  }, [adminUrl]);
+
+  const handleBack = useCallback(() => {
+    if (hasNavigate) {
+      onNavigate('dashboard');
+    }
+  }, [hasNavigate, onNavigate]);
+
+  return (
+    <ScreenFrame title="Admin Portal" png={PngAdminDash}>
+      <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 360 }}>
+        The admin experience now lives in a dedicated portal. You will be redirected automatically,
+        but you can also use the button below to open the admin tools manually.
+      </div>
+      <button onClick={handleOpenPortal}>Open admin portal</button>
+      {hasNavigate && (
+        <button onClick={handleBack}>Back to dashboard</button>
+      )}
+      <div style={{ fontSize: 12, opacity: 0.7, wordBreak: 'break-all' }}>{adminUrl}</div>
+    </ScreenFrame>
+  );
+}
+
+export function AdminDashboardScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="overview" />;
+}
+
+export function AdminUserManagementScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="users" />;
+}
+
+export function AdminPointsTrackingScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="txns" />;
+}
+
+export function AdminFiguresDataScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="figures" />;
+}
+
+export function AdminResultPostingScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="results" />;
+}
+
+export function AdminReportsScreen(props) {
+  return <AdminPortalRedirectScreen {...props} screenName="reports" />;
+}
 // Barrel-style named export for namespace imports
 // Allows: import { Screens } from '../../screens'; or import * as Screens from '../../screens';
 export const Screens = {
@@ -2355,4 +2433,10 @@ export const Screens = {
   WithdrawRequestScreen,
   HistoryScreen,
   WithdrawSetupScreen,
+  AdminDashboardScreen,
+  AdminUserManagementScreen,
+  AdminPointsTrackingScreen,
+  AdminFiguresDataScreen,
+  AdminResultPostingScreen,
+  AdminReportsScreen,
 };
