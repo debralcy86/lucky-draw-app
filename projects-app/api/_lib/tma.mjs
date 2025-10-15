@@ -54,7 +54,7 @@ export function withTMA(handler, { requireAdmin = false } = {}) {
       }
 
       // Import verifier (single-bot). Accept named or default export.
-      const mod = await import('../_disabled/telegramVerify.mjs');
+      const mod = await import('./telegramVerify.mjs');
       const verifyTma = mod.verifyTma ?? mod.default;
       if (typeof verifyTma !== 'function') {
         return res.status(500).json({ ok: false, error: 'telegram_verify_export_invalid' });
