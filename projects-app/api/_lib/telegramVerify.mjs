@@ -1,75 +1,45 @@
-// api/_lib/telegramVerify.mjs — Telegram WebApp initData verification (single-bot, ESM)
-import crypto from 'node:crypto';
+import crypto from 'crypto';
 
-function buildDataCheckString(params) {
-  const keys = [];
-  for (const [k] of params.entries()) {
-    if (k === 'hash') continue;
-    keys.push(k);
-  }
-  keys.sort();
-  const parts = [];
-  for (const k of keys) parts.push(`${k}=${params.get(k) ?? ''}`);
-  return parts.join('\n');
-}
+export function verifyTelegramInitData(initDataRaw, botToken) {
+  const tok0 = String(botToken || '').trim();
+  const tok = (tok0.startsWith('"') && tok0.endsWith('"')) || (tok0.startsWith("'") && tok0.endsWith("'"))
+    ? tok0.slice(1, -1)
+    : tok0;
 
-function parseUser(params) {
+  if (!tok) return { ok: false, reason: 'missing_bot_token' };
+
+  const secret = crypto.createHash('sha256').update(tok, 'utf8').digest();
+
   try {
-    const raw = params.get('user');
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+    const params = new URLSearchParams(initDataRaw);
+    const providedHash = params.get('hash');
+    if (!providedHash) return { ok: false, reason: 'missing_hash' };
+
+    params.delete('hash');
+    const dataCheckString = Array.from(params.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+
+    const expected = crypto.createHmac('sha256', secret).update(dataCheckString, 'utf8').digest('hex');
+    if (expected !== providedHash) return { ok: false, reason: 'hash_mismatch' };
+
+    let user = null;
+    const userRaw = params.get('user');
+    if (userRaw) {
+      try { user = JSON.parse(userRaw); } catch {}
+    }
+
+    return { ok: true, userId: user?.id ?? null, user, isAdmin: false, tag: 'telegramVerify/sha256-hmac-1bot' };
+  } catch (e) {
+    return { ok: false, reason: 'parse_error', message: String(e?.message || e) };
+  }
 }
 
-export function verifyTelegramInitData(initDataRaw, botToken, maxAgeSec = Number(process.env.TMA_MAX_AGE_SEC || 86400)) {
-  if (!initDataRaw || typeof initDataRaw !== 'string') {
-    return { ok: false, reason: 'missing_initData' };
-  }
-  if (!botToken) {
-    return { ok: false, reason: 'missing_bot_token' };
-  }
-
-  const params = new URLSearchParams(String(initDataRaw));
-  const providedHash = String(params.get('hash') || '');
-  if (!providedHash) return { ok: false, reason: 'missing_hash' };
-
-  const dataCheckString = buildDataCheckString(params);
-  // Correct secret per spec: secret = SHA256(botToken) (raw bytes)
-  const secret = crypto.createHash('sha256').update(botToken, 'utf8').digest();
-  const expectedHex = crypto.createHmac('sha256', secret).update(dataCheckString, 'utf8').digest('hex');
-
-  const a = Buffer.from(expectedHex, 'hex');
-  const b = Buffer.from(providedHash, 'hex');
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return { ok: false, reason: 'hash_mismatch' };
-  }
-
-  const authDate = Number(params.get('auth_date') || 0);
-  if (!Number.isFinite(authDate) || authDate <= 0) return { ok: false, reason: 'bad_auth_date' };
-  const now = Math.floor(Date.now() / 1000);
-  if (now - authDate > maxAgeSec) return { ok: false, reason: 'stale_auth_date' };
-
-  const user = parseUser(params);
-  const userId = user?.id ? String(user.id) : '';
-  if (!userId) return { ok: false, reason: 'missing_user' };
-
-  const adminList = String(process.env.TMA_ADMIN_IDS || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-  const isAdmin = adminList.includes(userId);
-
-  return {
-    ok: true,
-    user,
-    userId,
-    isAdmin,
-    params: Object.fromEntries(params.entries()),
-  };
+export default function verifyInitData(initDataRaw, botToken = process.env.TELEGRAM_BOT_TOKEN || '') {
+  const tok0 = String(botToken || '').trim();
+  const tok = (tok0.startsWith('"') && tok0.endsWith('"')) || (tok0.startsWith("'") && tok0.endsWith("'"))
+    ? tok0.slice(1, -1)
+    : tok0;
+  return verifyTelegramInitData(initDataRaw, tok);
 }
-
-export default function verifyInitData(initDataRaw, botToken = process.env.TELEGRAM_BOT_TOKEN || '', options = {}) {
-  const res = verifyTelegramInitData(initDataRaw, botToken, options.maxAgeSec);
-  if (!res.ok) return { ok: false, reason: res.reason || 'invalid_init_data' };
-  return { ok: true, userId: res.userId, user: res.user, isAdmin: res.isAdmin, payload: res.params };
-}
-
-// Named alias used by middleware; avoid self-references
-export const verifyTma = verifyInitData;
