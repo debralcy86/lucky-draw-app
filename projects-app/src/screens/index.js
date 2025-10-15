@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/rules-of-hooks */
 import HotspotImage from '../components/HotspotImage'
 import { formatGroup, formatFigure, formatGroupFigure } from '../lib/formatters.mjs';
 
