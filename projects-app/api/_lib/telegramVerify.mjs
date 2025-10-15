@@ -147,14 +147,9 @@ export function verifyTelegramInitData(initDataRaw, botToken) {
     return parsed;
   }
 
-  const secret = crypto
-    .createHmac('sha256', 'WebAppData')
-    .update(token, 'utf8')
-    .digest();
-  const expectedBuffer = crypto
-    .createHmac('sha256', secret)
-    .update(parsed.dataCheckString, 'utf8')
-    .digest();
+  // follows canonical SHA256(botToken) → HMAC(data_check_string)
+  const secret = crypto.createHash('sha256').update(token, 'utf8').digest();
+  const expectedBuffer = crypto.createHmac('sha256', secret).update(parsed.dataCheckString, 'utf8').digest();
 
   if (!compareHashes(parsed.providedHash, expectedBuffer)) {
     return { ok: false, reason: 'hash_mismatch' };
