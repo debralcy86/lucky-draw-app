@@ -124,3 +124,5 @@ async function parseJson(req) {
 
 export default withCors(handler);
 
+
+export const verifyTma = verifyInitData || verifyTelegramInitData;

@@ -1,0 +1,31 @@
+* Host localhost:58684 was resolved.
+* IPv6: ::1
+* IPv4: 127.0.0.1
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying [::1]:58684...
+* Connected to localhost (::1) port 58684
+> POST /api/whoami HTTP/1.1
+> Host: localhost:58684
+> User-Agent: curl/8.7.1
+> Accept: */*
+> Authorization: tma query_id=REPLACE&user=REPLACE&auth_date=REPLACE&hash=REPLACE
+> 
+* Request completely sent off
+  0     0    0     0    0     0      0      0 --:--:--  0:00:01 --:--:--     0< HTTP/1.1 500 Internal Server Error
+< cache-control: public, max-age=0, must-revalidate
+< server: Vercel
+< x-vercel-id: dev1::dev1::l09sc-1760464279969-0ac75f355808
+< x-vercel-cache: MISS
+< access-control-allow-headers: Authorization, Content-Type, X-Telegram-InitData, X-Admin-Token
+< access-control-allow-methods: GET,POST,OPTIONS
+< access-control-allow-origin: *
+< connection: close
+< content-length: 75
+< content-type: application/json; charset=utf-8
+< date: Tue, 14 Oct 2025 17:51:19 GMT
+< 
+{ [75 bytes data]
+100    75  100    75    0     0     45      0  0:00:01  0:00:01 --:--:--    45100    75  100    75    0     0     45      0  0:00:01  0:00:01 --:--:--    45
+* Closing connection
+{"ok":false,"error":"withTMA_crash","detail":"verifyTma is not a function"}

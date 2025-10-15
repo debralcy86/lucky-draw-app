@@ -1,0 +1,34 @@
+// whoami.js — minimal route with import diagnostics (ESM/CJS-safe)
+export const config = { runtime: 'nodejs' };
+
+export default async function (req, res) {
+  let withTMA;
+  try {
+    const mod = await import('./_lib/tma.mjs');
+    withTMA = mod.withTMA;
+    if (typeof withTMA !== 'function') {
+      console.error('[whoami] tma import keys:', Object.keys(mod || {}));
+      return res.status(500).json({ ok: false, error: 'tma_import_invalid', keys: Object.keys(mod || {}) });
+    }
+  } catch (e) {
+    console.error('[whoami] failed to import tma.mjs', e);
+    return res.status(500).json({ ok: false, error: 'tma_import_failed', detail: String(e?.message || e) });
+  }
+
+  const inner = async (_req, _res) => {
+    if (_req.method !== 'POST') {
+      return _res.status(405).json({ ok: false, error: 'method_not_allowed' });
+    }
+    const { user, userId, isAdmin, tag } = _req.tma || {};
+    return _res.status(200).json({
+      ok: true,
+      tag: tag || 'whoami/v5.1-diag-2025-10-15',
+      userId,
+      isAdmin,
+      user
+    });
+  };
+
+  const wrapped = withTMA(inner);
+  return wrapped(req, res);
+}
