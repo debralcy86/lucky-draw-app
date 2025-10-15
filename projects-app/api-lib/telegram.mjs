@@ -44,9 +44,7 @@ export function verifyInitData(initDataString, botToken) {
 
   // secret_key = HMAC_SHA256('WebAppData', botToken)
   const secretKey = crypto
-    .createHmac('sha256', 'WebAppData')
-    .update(botToken)
-    .digest(); // binary buffer
+    .createHash('sha256').update(botToken,'utf8').digest(); // binary buffer
 
   // expected = HMAC_SHA256(secret_key, data_check_string) (hex)
   const expected = crypto
