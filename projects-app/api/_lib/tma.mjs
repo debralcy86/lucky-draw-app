@@ -28,7 +28,12 @@ export function getInitDataFromReq(req) {
       ? (req.body.initData || '')
       : '';
 
-  return String(fromAuth || fromHeader || fromQuery || fromBody || '').trim();
+  let raw = String(fromAuth || fromHeader || fromQuery || fromBody || '').trim();
+  // If someone accidentally wrapped the initData in quotes when passing via header/body, strip one pair of quotes.
+  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+    raw = raw.slice(1, -1);
+  }
+  return raw;
 }
 
 // Lightweight CORS for API routes
@@ -51,6 +56,17 @@ export function withTMA(handler, { requireAdmin = false } = {}) {
       const initData = getInitDataFromReq(req);
       if (!initData) {
         return res.status(401).json({ ok: false, error: 'missing_init_data' });
+      }
+      // Diagnostic: ensure raw initData actually contains a hash
+      try {
+        if (!/(^|&)?hash=/.test(initData)) {
+          const sp = new URLSearchParams(initData);
+          const keys = Array.from(sp.keys());
+          return res.status(400).json({ ok: false, error: 'verify_failed', message: '"hash" parameter is missing', keys });
+        }
+      } catch (_) {
+        // If initData isn't even parseable as URL params, signal clearly
+        return res.status(400).json({ ok: false, error: 'verify_failed', message: 'initData not URLSearchParams-parseable' });
       }
 
       // Import verifier (single-bot). Accept named or default export.
