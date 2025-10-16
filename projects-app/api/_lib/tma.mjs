@@ -1,5 +1,6 @@
 import { withCors } from './cors.mjs';
 import { verifyTma } from './telegramVerify.mjs';
+import { decode as htmlDecode } from 'html-entities';
 
 function getHeaderValue(req, name) {
   const headers = req?.headers;
@@ -82,6 +83,11 @@ export function getInitDataFromReq(req) {
     raw = raw.slice(1, -1);
   }
 
+  // Decode HTML entities like &amp; back to & before parsing/verification
+  try {
+    raw = htmlDecode(raw);
+  } catch {}
+
   return raw;
 }
 
@@ -106,6 +112,42 @@ export function withTMA(handler, options = {}) {
         process.env.TELEGRAM_BOT_TOKEN;
 
       const verification = await verifyTma(initData, tokensSource);
+
+      if (typeof process !== 'undefined') {
+        console.log('[tma-verify] TMA_DEBUG runtime =', process.env?.TMA_DEBUG ?? '(undefined)');
+      }
+
+      if (process.env.TMA_DEBUG === '1' && !verification?.ok) {
+        try {
+          const sp = new URLSearchParams(initData);
+          const provided = sp.get('hash') || '';
+          sp.delete('hash');
+          const dcsA = Array.from(sp.entries()).map(([k,v]) => `${k}=${v}`).sort().join('\n');
+          const dcsAsha = (await import('crypto')).createHash('sha256').update(dcsA, 'utf8').digest('hex').slice(0,12);
+          const pairs = String(initData).split('&');
+          let provB=''; const kept=[];
+          for (const p of pairs){ const i=p.indexOf('='); const k=i===-1?p:p.slice(0,i); if(k==='hash'){ provB=i===-1?'':p.slice(i+1); continue;} kept.push({k,raw:p}); }
+          kept.sort((a,b)=>a.k.localeCompare(b.k));
+          const dcsB = kept.map(x=>x.raw).join('\n');
+          const dcsBsha = (await import('crypto')).createHash('sha256').update(dcsB, 'utf8').digest('hex').slice(0,12);
+          console.log('[tma-verify][debug]', { providedPrefix: (provided||provB).slice(0,12), dcsAsha, dcsBsha });
+        } catch (e) {
+          console.log('[tma-verify][debug] failed to compute fingerprints', String(e&&e.message||e));
+        }
+      }
+
+      if (process.env.TMA_DEBUG === '1') {
+        console.log('[tma-verify]', {
+          ok: verification?.ok,
+          reason: verification?.reason,
+          providedHash: verification?.providedHash?.slice(0, 6) + '...' || '',
+          expectedHash: verification?.expectedHash
+            ? '***' + (verification.expectedHash.slice(-4) || '')
+            : '',
+          keys: verification?.keys,
+          userId: verification?.userId,
+        });
+      }
       if (!verification?.ok) {
         return res.status(401).json({
           ok: false,
