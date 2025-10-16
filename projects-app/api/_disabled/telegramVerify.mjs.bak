@@ -1,0 +1,49 @@
+import crypto from 'crypto';
+
+export function verifyTelegramInitData(initDataRaw, botToken) {
+  const tok0 = String(botToken || '').trim();
+  const tok = (tok0.startsWith('"') && tok0.endsWith('"')) || (tok0.startsWith("'") && tok0.endsWith("'"))
+    ? tok0.slice(1, -1)
+    : tok0;
+
+  if (!tok) return { ok: false, reason: 'missing_bot_token' };
+
+  const secret = crypto.createHash('sha256').update(tok, 'utf8').digest();
+
+  try {
+    const params = new URLSearchParams(initDataRaw);
+    const providedHash = params.get('hash');
+    if (!providedHash) return { ok: false, reason: 'missing_hash_signature' };
+
+    const filtered = [];
+    for (const [key, value] of params.entries()) {
+      if (key === 'hash' || key === 'signature') continue;
+      filtered.push([key, value]);
+    }
+    const dataCheckString = filtered
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+
+    const expected = crypto.createHmac('sha256', secret).update(dataCheckString, 'utf8').digest('hex');
+    if (expected !== providedHash) return { ok: false, reason: 'hash_mismatch' };
+
+    let user = null;
+    const userRaw = params.get('user');
+    if (userRaw) {
+      try { user = JSON.parse(userRaw); } catch {}
+    }
+
+    return { ok: true, userId: user?.id ?? null, user, isAdmin: false, tag: 'telegramVerify/sha256-hmac-1bot' };
+  } catch (e) {
+    return { ok: false, reason: 'parse_error', message: String(e?.message || e) };
+  }
+}
+
+export default function verifyInitData(initDataRaw, botToken = process.env.TELEGRAM_BOT_TOKEN || '') {
+  const tok0 = String(botToken || '').trim();
+  const tok = (tok0.startsWith('"') && tok0.endsWith('"')) || (tok0.startsWith("'") && tok0.endsWith("'"))
+    ? tok0.slice(1, -1)
+    : tok0;
+  return verifyTelegramInitData(initDataRaw, tok);
+}

@@ -1,10 +1,8 @@
 export const config = { runtime: 'nodejs' };
 
 import { createClient } from '@supabase/supabase-js';
-import verifyInitData, { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
+import { withTMA } from './_lib/tma.mjs';
 import { hashPin } from './_lib/pin.js';
-
-const ALLOW_HEADERS = 'Content-Type, Authorization, X-Telegram-InitData, X-Debug-RID';
 
 function rid() {
   return Math.random().toString(36).slice(2, 10);
@@ -78,57 +76,37 @@ function maskProfileRow(row) {
 }
 
 
-export default async function profile(req, res) {
+async function profileHandler(req, res) {
   const requestId = rid();
-  const allowOrigin = String(process.env.CORS_ORIGIN || '*')
-    .replace(/[\r\n]/g, ' ')
-    .split(',')[0]
-    .trim() || '*';
-  res.setHeader('Access-Control-Allow-Origin', allowOrigin || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);
-
-  if (req.method === 'OPTIONS') {
-    res.statusCode = 200;
-    return res.end();
-  }
-
   if (req.method !== 'GET' && req.method !== 'POST') {
     return send(res, 405, { ok: false, error: 'Method Not Allowed', rid: requestId });
   }
 
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } = process.env;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !TELEGRAM_BOT_TOKEN) {
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return send(res, 500, { ok: false, error: 'Missing server configuration', rid: requestId });
   }
 
   try {
     const body = await readJsonBody(req);
-    const initData = getInitData(req, body);
-    if (!initData) {
-      return send(res, 400, { ok: false, error: 'Missing initData', rid: requestId });
+    const initData = req.tmaInitData || getInitData(req, body);
+    const tma = req.tma || {};
+    const userId = tma.userId ? String(tma.userId) : '';
+    const authDate = tma.authDate != null ? Number(tma.authDate) : null;
+    const payload = tma.payload || tma.params || {};
+    const verifiedUser = tma.user || {};
+
+    if (!userId) {
+      return send(res, 401, { ok: false, error: 'Missing verified Telegram user', rid: requestId });
     }
 
-    const check = verifyTelegramInitData(initData, TELEGRAM_BOT_TOKEN) || verifyInitData(initData, TELEGRAM_BOT_TOKEN);
-    if (!check?.ok) {
-      return send(res, 401, { ok: false, error: check?.error || 'Invalid Telegram session', rid: requestId });
-    }
-
-    const payload = check?.payload || check?.params || {};
-    const verifiedUser = check?.user || {};
-    const userIdRaw = check?.userId || verifiedUser?.id || verifiedUser?.user?.id;
-    const authDateRaw = payload?.auth_date || payload?.authDate;
-
-    const userId = userIdRaw ? String(userIdRaw) : '';
-    const authDate = Number(authDateRaw || 0);
-
-    if (!userId || !Number.isFinite(authDate) || authDate <= 0) {
-      return send(res, 400, { ok: false, error: 'Missing required Telegram fields', rid: requestId });
+    if (authDate != null && (!Number.isFinite(authDate) || authDate <= 0)) {
+      return send(res, 400, { ok: false, error: 'Invalid Telegram auth_date', rid: requestId });
     }
 
     console.log('profile_request', {
       rid: requestId,
-      init_len: initData.length,
+      init_len: initData ? initData.length : 0,
       user_id: userId,
       auth_date: authDate,
     });
@@ -253,3 +231,15 @@ export default async function profile(req, res) {
     return send(res, 500, { ok: false, error: 'Server error', rid: requestId });
   }
 }
+
+const corsOrigin = String(process.env.CORS_ORIGIN || '*')
+  .replace(/[\r\n]/g, ' ')
+  .split(',')[0]
+  .trim() || '*';
+
+export default withTMA(profileHandler, {
+  cors: {
+    origin: corsOrigin || '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+  },
+});
