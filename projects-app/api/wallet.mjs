@@ -11,7 +11,8 @@ function pickInitData(req) {
 }
 
 function num(v) {
-  const n = Math.floor(Number(v || 0));
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === 'string' ? Number(v.trim()) : Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
