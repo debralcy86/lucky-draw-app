@@ -38,6 +38,11 @@ export default async function handler(req, res) {
   const method = body?.method || 'bank';
   const note = typeof body?.note === 'string' ? body.note.trim() : '';
 
+  // Allow legacy/beta clients to call `/api/wallet` with `action: "bet_totals"` without hitting amount guard
+  if (action === 'bet_totals') {
+    return res.status(200).json({ ok: true, tag: 'wallet/bet_totals-noop' });
+  }
+
   if (!(amount > 0)) {
     return res.status(400).json({ ok: false, error: 'invalid_amount', tag: 'wallet/validate' });
   }
