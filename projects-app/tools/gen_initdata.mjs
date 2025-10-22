@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { sign } from '@telegram-apps/init-data-node';
+import crypto from 'node:crypto';
 import fs from 'fs';
 
 function arg(name, def = undefined) {
@@ -44,15 +44,24 @@ if (chatInst) p.set('chat_instance', chatInst);
 const queryId = arg('query-id');
 if (queryId) p.set('query_id', queryId);
 
-const init = p.toString();
+const entries = Array.from(p.entries());
+entries.sort(([a], [b]) => a.localeCompare(b));
+const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join('\n');
+
 let hash;
 try {
-  hash = sign(init, token);
+  const secret = crypto.createHmac('sha256', 'WebAppData')
+    .update(token, 'utf8')
+    .digest();
+  hash = crypto.createHmac('sha256', secret)
+    .update(dataCheckString, 'utf8')
+    .digest('hex');
 } catch (err) {
   console.error('Failed to sign initData:', err?.message || String(err));
   process.exit(3);
 }
 
+const init = entries.map(([k, v]) => `${k}=${v}`).join('&');
 const out = `${init}&hash=${hash}`;
 try {
   fs.writeFileSync('/tmp/initdata.txt', out);

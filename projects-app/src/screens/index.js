@@ -30,9 +30,41 @@ import PngAdminFigures from '../assets/figma/12_Admin_Figures_Data.png';
 import PngAdminResults from '../assets/figma/13_Admin_Result_Posting.png';
 import PngAdminReports from '../assets/figma/14_Admin_Reports.png'
 
+import { apiFetch } from '../lib/apiFetch';
+import { getInitData as importedGetInitData, ensureTelegramInitData } from '../lib/initData';
+const getInitData = importedGetInitData;
+export { importedGetInitData as getInitData };
+
 // Telegram bot wiring (centralized)
 // You can override at runtime by setting window.__BOT_USERNAME__ = 'LuckyDrawForUBot'
 const BOT_USERNAME = (typeof window !== 'undefined' && window.__BOT_USERNAME__) || 'LuckyDrawForUBot';
+
+// 🧩 Version tag: v2025-10-19-ux01
+(function ensureTelegramContextBanner() {
+  if (typeof window === 'undefined') return;
+  const initData = ensureTelegramInitData();
+  const hasTelegramContext = Boolean(
+    initData || (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData)
+  );
+  if (hasTelegramContext) {
+    console.log('TAG: v2025-10-19-ux01 banner skipped (Telegram context detected)');
+    return;
+  }
+  if (document.getElementById('tg-open-warning')) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'tg-open-warning';
+  banner.textContent = '⚠️ Please open this Mini App inside Telegram to continue.';
+  banner.style.cssText = `
+    position:fixed;top:0;left:0;right:0;
+    background:#ffb347;color:#000;
+    padding:10px 14px;text-align:center;
+    font-weight:600;z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto;
+    box-shadow:0 2px 8px rgba(0,0,0,0.15);
+  `;
+  document.body.prepend(banner);
+  console.log('TAG: v2025-10-19-ux01 banner injected');
+})();
 
 // Helper: build a deep link. You can switch between startapp / start as needed.
 export function tgBotLink(path = 'startapp', param = '') {
@@ -141,21 +173,7 @@ function useHotspotDebug(label, enabled, hotspots) {
   }, [enabled, hotspots, label]);
 }
 
-// --- Telegram initData + API helper (inline, step 1) ---
-export function getInitData() {
-  try {
-    const hasWin = typeof window !== 'undefined';
-    const loc = hasWin && window.location ? window.location : null;
-    const hash = loc ? (loc.hash || '') : '';
-    const search = loc ? (loc.search || '') : '';
-    const fromHash = hash.startsWith('#') ? new URLSearchParams(hash.slice(1)).get('tgWebAppData') : null;
-    const fromSearch = search ? new URLSearchParams(search).get('tgWebAppData') : null;
-    const fromTG = (hasWin && window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp.initData : '';
-    return fromHash || fromSearch || fromTG || '';
-  } catch (_) {
-    return '';
-  }
-}
+// --- Telegram initData + API helper (now centralized in ../lib/initData) ---
 
 function parseTelegramUserId(initData) {
   if (!initData) return '';
@@ -177,6 +195,20 @@ function safeTrim(value) {
   return String(value).trim();
 }
 
+function normalizeWithdrawPayload({
+  withdrawMethod = '',
+  withdrawDest = '',
+  withdrawHolder = '',
+  accountName = '',
+  name = '',
+} = {}) {
+  const method = safeTrim(withdrawMethod).toLowerCase();
+  const destination = safeTrim(withdrawDest);
+  const holderSource = withdrawHolder || accountName || name || '';
+  const holder = safeTrim(holderSource);
+  return { method, destination, holder };
+}
+
 function normalizeBetsFromResponse(bets) {
   if (!Array.isArray(bets)) return [];
   return bets.map((bet) => {
@@ -196,11 +228,8 @@ function normalizeBetsFromResponse(bets) {
 
 async function requestWalletAndHistory(initDataValue, { fallbackUserId = '', debug = false } = {}) {
   try {
-    const res = await fetch('/api/data-balance', {
+    const res = await apiFetch('/api/data-balance', {
       method: 'GET',
-      headers: {
-        'Authorization': 'tma ' + initDataValue,
-      },
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -345,19 +374,17 @@ export function LoginScreen({ onNavigate, debug = false }) {
       }
     } catch {}
 
-    // 2) From Telegram context (verified user id visible to client)
-    try {
-      const tgUnsafe = window?.Telegram?.WebApp?.initDataUnsafe;
-      const tgId = tgUnsafe?.user?.id ? String(tgUnsafe.user.id) : '';
-      if (tgId) {
-        setUserId((prev) => (prev && !prev.startsWith('U')) ? prev : tgId);
-        try { localStorage.setItem('LD_userId', tgId); } catch {}
-      }
-    } catch {}
+    // 2) From Telegram init data (signed user id)
+    const ensuredInitData = ensureTelegramInitData();
+    const initUserId = parseTelegramUserId(ensuredInitData);
+    if (initUserId) {
+      setUserId((prev) => (prev && !prev.startsWith('U')) ? prev : initUserId);
+      try { localStorage.setItem('LD_userId', initUserId); } catch {}
+    }
 
     // 3) From backend (/api/profile) using Authorization: tma & initData
     (async () => {
-      const initData = getInitData();
+      const initData = getInitData({ refresh: true });
       if (!initData) {
         setStatusMessage('Waiting for Telegram init data. Open inside Telegram to continue.');
         return;
@@ -369,13 +396,12 @@ export function LoginScreen({ onNavigate, debug = false }) {
       const initDataUserId = parseTelegramUserId(initData);
 
       try {
-        const res = await fetch('/api/profile', {
+        const res = await apiFetch('/api/profile', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'tma ' + initData
           },
-          body: JSON.stringify({ initData })
+          body: JSON.stringify({}),
         });
         const json = await res.json().catch(() => ({}));
 
@@ -384,7 +410,6 @@ export function LoginScreen({ onNavigate, debug = false }) {
         const backendId =
           json?.profile?.user_id ||
           json?.wallet?.user_id ||
-          (window?.Telegram?.WebApp?.initDataUnsafe?.user?.id ? String(window.Telegram.WebApp.initDataUnsafe.user.id) : '') ||
           '';
         const resolvedUserId = backendId || initDataUserId;
         if (resolvedUserId) {
@@ -467,27 +492,15 @@ export function LoginScreen({ onNavigate, debug = false }) {
     return () => { alive = false; };
   }, [debug, loadWalletAndHistory, setAuth, setWalletData]);
 
-  function genUserId() {
-    // Simple readable ID: U + yyyymmdd + - + 6 random base36 chars
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
-    return `U${y}${m}${day}-${rand}`;
-  }
-
   // Save profile to backend helper
   async function saveProfileRemote(initData, payload) {
     try {
-      const res = await fetch('/api/profile', {
+      const res = await apiFetch('/api/profile', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + (initData || '')
         },
         body: JSON.stringify({
-          initData,
           profile: payload,
         }),
       });
@@ -507,7 +520,7 @@ export function LoginScreen({ onNavigate, debug = false }) {
   async function handleContinue() {
     if (verifying || saving) return;
 
-    const initData = getInitData();
+    const initData = getInitData({ refresh: true });
     if (!initData) {
       console.log('[Telegram] initData missing — open this inside Telegram WebApp.');
       alert('Open inside Telegram to continue (initData missing).');
@@ -524,18 +537,8 @@ export function LoginScreen({ onNavigate, debug = false }) {
       }
     }
     if (!actualUserId) {
-      try {
-        const tgUnsafe = window?.Telegram?.WebApp?.initDataUnsafe;
-        if (tgUnsafe?.user?.id) {
-          actualUserId = String(tgUnsafe.user.id);
-          setUserId(actualUserId);
-        }
-      } catch {}
-    }
-    if (!actualUserId) {
-      actualUserId = genUserId();
-      setUserId(actualUserId);
-      try { localStorage.setItem('LD_userId', actualUserId); } catch {}
+      alert('Telegram account details unavailable. Relaunch the mini app from Telegram.');
+      return;
     }
 
     const trimmedName = safeTrim(name);
@@ -622,8 +625,11 @@ export function LoginScreen({ onNavigate, debug = false }) {
     return userId || '';
   })();
 
-  const pinDisplayValue = profileExists === true && hasStoredPin ? '****' : pin;
-  const fieldsReadOnly = profileExists === true;
+  // Keep name/contact locked after profile exists, but PIN must remain interactive
+  const nameContactReadOnly = profileExists === true;
+  // For PIN, always bind to live state so user can type; use placeholder for masking
+  const pinDisplayValue = pin;
+  const pinPlaceholder = (profileExists === true && hasStoredPin) ? 'Enter PIN' : 'Set PIN';
   const actionLabel = verifying ? 'Verifying...' : (profileExists === true ? (saving ? 'Logging In...' : 'Log In') : (saving ? 'Registering...' : 'Register'));
   const canSubmit = !verifying && !saving && (
     profileExists === true ||
@@ -653,10 +659,10 @@ export function LoginScreen({ onNavigate, debug = false }) {
       value: name,
       inputType: 'text',
       coerceNumber: false,
-      placeholder: fieldsReadOnly ? 'Loaded from profile' : 'Enter your name',
-      readOnly: fieldsReadOnly,
+      placeholder: nameContactReadOnly ? 'Loaded from profile' : 'Enter your name',
+      readOnly: nameContactReadOnly,
       disabled: verifying,
-      onChange: (v) => { if (!fieldsReadOnly) setName(v); }
+      onChange: (v) => { if (!nameContactReadOnly) setName(v); }
     },
 
     // 3) Contact Number field (input overlay)
@@ -668,10 +674,10 @@ export function LoginScreen({ onNavigate, debug = false }) {
       value: contact,
       inputType: 'tel',
       coerceNumber: false,
-      placeholder: fieldsReadOnly ? 'Loaded from profile' : 'Enter contact number',
-      readOnly: fieldsReadOnly,
+      placeholder: nameContactReadOnly ? 'Loaded from profile' : 'Enter contact number',
+      readOnly: nameContactReadOnly,
       disabled: verifying,
-      onChange: (v) => { if (!fieldsReadOnly) setContact(v); }
+      onChange: (v) => { if (!nameContactReadOnly) setContact(v); }
     },
 
     // 4) Password / PIN field (input overlay)
@@ -683,10 +689,10 @@ export function LoginScreen({ onNavigate, debug = false }) {
       value: pinDisplayValue,
       inputType: 'password',
       secure: true,
-      placeholder: fieldsReadOnly ? (hasStoredPin ? 'PIN on file' : 'Set PIN') : 'Set a secure PIN',
-      readOnly: fieldsReadOnly,
-      disabled: verifying || fieldsReadOnly,
-      onChange: (v) => { if (!fieldsReadOnly) setPin(v); }
+      placeholder: pinPlaceholder,
+      readOnly: false,
+      disabled: verifying,
+      onChange: (v) => { setPin(v); }
     },
 
     // 5) Bottom button → navigate to Dashboard
@@ -743,9 +749,8 @@ export function DashboardScreen({ onNavigate, debug = false }) {
     if (!initData) return () => { active = false; };
     (async () => {
       try {
-        const res = await fetch('/api/data-balance', {
+        const res = await apiFetch('/api/data-balance', {
           method: 'GET',
-          headers: { 'Authorization': 'tma ' + initData },
         });
         const json = await res.json().catch(() => ({}));
         if (!active) return;
@@ -774,7 +779,7 @@ export function DashboardScreen({ onNavigate, debug = false }) {
     if (!init) return;
     (async () => {
       try {
-        const r = await fetch('/api/data-balance', { headers: { Authorization: 'tma ' + init } });
+        const r = await apiFetch('/api/data-balance', { method: 'GET' });
         const j = await r.json().catch(() => ({}));
         const b = (j && (j.balance ?? j?.wallet?.balance)) ?? 0;
         setPtsBalance(Number(b) || 0);
@@ -954,11 +959,10 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
   const fetchBetTotals = useCallback(async (initDataValue, drawIdHint = null) => {
     if (!initDataValue) return;
     try {
-      const res = await fetch('/api/wallet', {
+      const res = await apiFetch('/api/wallet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + initDataValue,
         },
         body: JSON.stringify({
           action: 'bet_totals',
@@ -1023,24 +1027,23 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
     setSubmitting(true);
     setBetError('');
     try {
-      const res = await fetch('/api/wallet', {
+      const res = await apiFetch('/api/bet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + initData,
         },
         body: JSON.stringify({
-          action: 'bet',
-          draw_id: activeDrawId || undefined,
+          drawId: activeDrawId || undefined,
           bets: entries,
         }),
       });
       const json = await res.json().catch(() => ({}));
+      const responseDrawId = json?.draw?.id || json?.draw_id || null;
       if (!res.ok || !json?.ok) {
         const msg = json?.reason || json?.error || `Bet failed (${res.status})`;
         setBetError(msg);
         alert(msg);
-        await fetchBetTotals(initData, json?.draw_id || null);
+        await fetchBetTotals(initData, responseDrawId);
         return;
       }
 
@@ -1059,7 +1062,7 @@ function BoardScreenBase({ group, onNavigate, debug = false }) {
 
       setBetsByGroup(createEmptyBetsMap());
       clearStagedBets();
-      await fetchBetTotals(initData, json.draw_id || null);
+      await fetchBetTotals(initData, responseDrawId);
       alert('Bets placed!');
       try { window.dispatchEvent(new CustomEvent('wallet:updated')); } catch {}
       onNavigate('dashboard');
@@ -1207,14 +1210,12 @@ export function ConfirmScreen({ onNavigate, params, debug = false }) {
     setSubmitting(true);
     setError('');
     try {
-      const res = await fetch('/api/wallet', {
+      const res = await apiFetch('/api/bet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + initData,
         },
         body: JSON.stringify({
-          action: 'bet',
           bets: [{ group, figure, amount: amt }],
         }),
       });
@@ -1303,11 +1304,10 @@ export function DepositScreen({ onNavigate, debug = false }) {
         method: 'bank',
       };
       if (trimmedNote) payload.note = trimmedNote;
-      const res = await fetch('/api/wallet', {
+      const res = await apiFetch('/api/wallet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + initData,
         },
         body: JSON.stringify(payload),
       });
@@ -1377,7 +1377,7 @@ export function DepositScreen({ onNavigate, debug = false }) {
         textAlign: 'left',
         padding: '0 16px',
         fontWeight: 500,
-        cursor: 'pointer',
+        cursor: 'text',
         background: 'rgba(255,255,255,0)',       // transparent background
         backgroundColor: 'rgba(255,255,255,0)',
         outline: '1px solid rgba(255,255,255,0)',// invisible outline
@@ -1386,7 +1386,6 @@ export function DepositScreen({ onNavigate, debug = false }) {
         filter: 'none',
         WebkitBackdropFilter: 'none',
         backdropFilter: 'none',
-        caretColor: 'transparent',
       },
       onChange: setNote,
     },
@@ -1576,19 +1575,25 @@ export function WithdrawRequestScreen({ onNavigate, debug = false }) {
       return;
     }
     try {
+      const normalized = normalizeWithdrawPayload({
+        withdrawMethod: activeDestination.method || auth.withdrawMethod || 'bank',
+        withdrawDest: activeDestination.destination || `${activeDestination.bank || auth.withdrawMethod || 'bank'}:${activeDestination.accountNumber || auth.withdrawDest || ''}`,
+        withdrawHolder: activeDestination.accountHolder,
+        accountName: auth.accountName,
+        name: auth.name,
+      });
+
       const payload = {
         action: 'withdraw',
         amount: normalizedAmount,
-        method: (activeDestination.method || 'bank').toLowerCase(),
-        // Compose destination using WithdrawSetupScreen stored values
-        destination: `${activeDestination.bank || auth.withdrawMethod || 'bank'}:${activeDestination.accountNumber || auth.withdrawDest || ''}`.trim(),
-        account_holder: activeDestination.accountHolder || accountHolderName || auth.withdrawHolder || auth.name || '',
+        method: normalized.method || 'bank',
+        destination: normalized.destination,
+        account_holder: normalized.holder || accountHolderName || auth.withdrawHolder || auth.name || '',
       };
-      const res = await fetch('/api/wallet', {
+      const res = await apiFetch('/api/wallet', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'tma ' + initData,
         },
         body: JSON.stringify(payload),
       });
@@ -1699,15 +1704,19 @@ export function HistoryScreen({ onNavigate, debug = false }) {
   const [limit, setLimit] = useState(50);
   const [offset, setOffset] = useState(0);
 
-  const init = getInitData && getInitData();
-
   const loadTxns = useCallback(async () => {
-    if (!init) return;
+    // Always read the freshest initData at call-time; retry if missing
+    let initNow = getInitData && getInitData({ refresh: true });
+    if (!initNow) {
+      initNow = ensureTelegramInitData && ensureTelegramInitData();
+    }
+    if (!initNow) {
+      console.warn('HistoryScreen: initData not yet ready, skipping loadTxns.');
+      return;
+    }
     setLoading(true); setErr('');
     try {
-      const r = await fetch(`/api/data-balance?limit=${limit}&offset=${offset}`, {
-      headers: { Authorization: 'tma ' + init },
-      });
+      const r = await apiFetch(`/api/data-balance?limit=${limit}&offset=${offset}`);
       const j = await r.json().catch(() => ({}));
       const txns = Array.isArray(j?.txns)
         ? j.txns
@@ -1721,16 +1730,44 @@ export function HistoryScreen({ onNavigate, debug = false }) {
     } finally {
       setLoading(false);
     }
-  }, [init, limit, offset]);
+  }, [limit, offset]);
 
-useEffect(() => {
-  function onWalletUpdated() {
-    // slight debounce so backend finishes writes
-    setTimeout(() => loadTxns(), 120);
-  }
-  window.addEventListener('wallet:updated', onWalletUpdated);
-  return () => window.removeEventListener('wallet:updated', onWalletUpdated);
-}, [loadTxns]);
+
+  useEffect(() => {
+    function onWalletUpdated() {
+      // slight debounce so backend finishes writes
+      setTimeout(() => loadTxns(), 120);
+    }
+    window.addEventListener('wallet:updated', onWalletUpdated);
+    return () => window.removeEventListener('wallet:updated', onWalletUpdated);
+  }, [loadTxns]);
+
+  // Trigger initial history load on mount and whenever limit/offset changes
+  useEffect(() => {
+    loadTxns();
+  }, [loadTxns, limit, offset]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Attempt an immediate load (covers the normal case where initData is present)
+    loadTxns();
+
+    // If initData isn't ready yet (running outside Telegram and then opened),
+    // poll briefly until it becomes available, then load once.
+    if (!(getInitData && getInitData())) {
+      const timer = setInterval(() => {
+        const ready = getInitData && getInitData();
+        if (ready) {
+          clearInterval(timer);
+          if (!cancelled) loadTxns();
+        }
+      }, 400);
+      return () => { cancelled = true; clearInterval(timer); };
+    }
+
+    return () => { cancelled = true; };
+  }, [loadTxns]);
 
   // Normalize inputs: server txns (rows) + any in-memory txns/bets as fallback
   const serverTxns = rows;
@@ -1761,6 +1798,9 @@ useEffect(() => {
       let figure = t?.figure || '';
 
       if (isBetTxn) {
+        const mColon = note.match(/\bbet\s*:\s*([ABCD])\s*:\s*[^:\s]+?\s*:\s*(\d{1,2})\b/i);
+        if (mColon) { group = group || mColon[1]; figure = figure || mColon[2]; }
+
         const mHash = note.match(/\b([ABCD])#(\d{1,2})\b/i);
         if (mHash) { group = group || mHash[1]; figure = figure || mHash[2]; }
 
@@ -2064,7 +2104,13 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
       setSaveStatus('');
       setSaveError('');
       try {
-        const destination = `${method}:${trimmedAccount}`;
+        const normalized = normalizeWithdrawPayload({
+          withdrawMethod: method,
+          withdrawDest: `${method}:${trimmedAccount}`,
+          withdrawHolder: trimmedHolder,
+          accountName: auth.accountName,
+          name: auth.name,
+        });
         const res = await fetch('/api/profile', {
           method: 'POST',
           headers: {
@@ -2074,9 +2120,9 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
           body: JSON.stringify({
             initData,
             profile: {
-              withdrawMethod: method,
-              withdrawDest: destination,
-              withdrawHolder: trimmedHolder,
+              withdrawMethod: normalized.method,
+              withdrawDest: normalized.destination,
+              withdrawHolder: normalized.holder,
             },
           }),
         });
@@ -2090,9 +2136,9 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
         const profile = json.profile || {};
         setSaveStatus('Withdraw info saved.');
         setAuth({
-          withdrawMethod: profile.withdraw_method || method,
-          withdrawDest: profile.withdraw_dest || destination,
-          withdrawHolder: profile.withdraw_holder || trimmedHolder,
+          withdrawMethod: profile.withdraw_method || normalized.method,
+          withdrawDest: profile.withdraw_dest || normalized.destination,
+          withdrawHolder: profile.withdraw_holder || normalized.holder,
           profile: { ...(auth.profile || {}), ...profile },
         });
         try {
@@ -2138,15 +2184,23 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
         const bankOpt = (bankOptions || []).find((o) => o.value === method || o.value === selectedBank || o.label?.toLowerCase() === method);
         const bankLabel = bankOpt?.label || method;
 
+        const normalized = normalizeWithdrawPayload({
+          withdrawMethod: method,
+          withdrawDest: `${method}:${trimmedAccount}`,
+          withdrawHolder: trimmedHolder,
+          accountName: auth.accountName,
+          name: auth.name,
+        });
+
         // Compose a new destination entry
         const newEntry = {
           id: `dest-${Date.now()}`,
-          method,
+          method: normalized.method,
           bank: bankLabel,
           bankLabel,
           accountNumber: trimmedAccount,
-          accountHolder: trimmedHolder,
-          destination: `${method}:${trimmedAccount}`,
+          accountHolder: normalized.holder,
+          destination: normalized.destination,
         };
 
         // Append to existing withdrawAccounts (client-side)
@@ -2157,9 +2211,9 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
         const payload = {
           initData,
           profile: {
-            withdrawMethod: method,
-            withdrawDest: newEntry.destination,
-            withdrawHolder: trimmedHolder,
+            withdrawMethod: normalized.method,
+            withdrawDest: normalized.destination,
+            withdrawHolder: normalized.holder,
             withdrawAccounts: nextAccounts,
           },
         };
@@ -2184,9 +2238,9 @@ export function WithdrawSetupScreen({ onNavigate, debug = false }) {
         // Update client auth state with new array while keeping single-field compatibility
         setAuth({
           ...auth,
-          withdrawMethod: profile.withdraw_method || method,
-          withdrawDest: profile.withdraw_dest || newEntry.destination,
-          withdrawHolder: profile.withdraw_holder || trimmedHolder,
+          withdrawMethod: profile.withdraw_method || normalized.method,
+          withdrawDest: profile.withdraw_dest || normalized.destination,
+          withdrawHolder: profile.withdraw_holder || normalized.holder,
           withdrawAccounts: Array.isArray(profile.withdraw_accounts) ? profile.withdraw_accounts : nextAccounts,
           profile: { ...(auth.profile || {}), ...profile },
         });

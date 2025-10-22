@@ -3,24 +3,25 @@ const BASE = location.origin;
 
 export function getInitData() {
   try {
-    const hash = location.hash && location.hash.startsWith('#')
-      ? new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')
-      : '';
-    const qs = location.search
-      ? new URLSearchParams(location.search).get('tgWebAppData')
-      : '';
-    const sdk = window?.Telegram?.WebApp?.initData || '';
-    return hash || qs || sdk || '';
+    return window?.Telegram?.WebApp?.initData || '';
   } catch {
     return '';
   }
 }
 
 async function postJSON(path, body) {
+  // TAG: v2025-10-18-auth01 postJSON header auth enabled
+  const initData = getInitData();
+  const headers = { 'Content-Type': 'application/json' };
+  if (initData) headers['Authorization'] = 'tma ' + initData;
+
+  const payload = { ...body };
+  if (initData && !('initData' in payload)) payload.initData = initData;
+
   const res = await fetch(BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+    headers,
+    body: JSON.stringify(payload),
   });
   let json = {};
   try {
@@ -30,7 +31,11 @@ async function postJSON(path, body) {
 }
 
 async function getJSON(url) {
-  const res = await fetch(url);
+  // TAG: v2025-10-18-auth01 getJSON header auth enabled
+  const initData = getInitData();
+  const headers = {};
+  if (initData) headers['Authorization'] = 'tma ' + initData;
+  const res = await fetch(url, { headers });
   let json = {};
   try {
     json = await res.json();

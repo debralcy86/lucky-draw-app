@@ -1,0 +1,50 @@
+import { verifyTma } from './_lib/telegramVerify.mjs';
+
+function pickInitData(req) {
+  const hAuth = req.headers['authorization'] || '';
+  const hInit = req.headers['x-telegram-initdata'] || req.headers['x-telegram-init-data'] || '';
+  const qInit = (req.query && (req.query.initData || req.query.initdata)) || '';
+  const b = req.body || {};
+  const bInit = typeof b === 'string' ? b : (b.initData || b.initdata || '');
+  return hAuth || hInit || qInit || bInit || '';
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ ok: false, error: 'method_not_allowed' });
+  }
+
+  const initDataRaw = pickInitData(req);
+  const tma = verifyTma(initDataRaw);
+  if (!tma.ok) {
+    return res.status(401).json({ ok: false, error: 'invalid_init_data', reason: tma.reason || null, tag: 'wallet/verify' });
+  }
+
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  const action = body?.action || '';
+  const amount = Math.max(0, Math.floor(Number(body?.amount || 0)));
+  const method = body?.method || 'bank';
+  const note = typeof body?.note === 'string' ? body.note.trim() : '';
+
+  if (action !== 'deposit') {
+    return res.status(400).json({ ok: false, error: 'invalid_action', tag: 'wallet/validate' });
+  }
+  if (!(amount > 0)) {
+    return res.status(400).json({ ok: false, error: 'invalid_amount', tag: 'wallet/validate' });
+  }
+
+  // Minimal success (no DB yet). Next step: insert wallet txn in Supabase.
+  return res.status(200).json({
+    ok: true,
+    accepted: true,
+    userId: tma.userId ?? null,
+    amount,
+    method,
+    note: note || null,
+    tag: 'wallet/accepted'
+  });
+}

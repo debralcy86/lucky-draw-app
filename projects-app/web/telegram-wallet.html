@@ -160,6 +160,11 @@
     apiBaseLabel.textContent = API_BASE;
 
     const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+    // Force-use Telegram raw initData (exact string, no encoding)
+    const __wa = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+    const __RAW_INIT = (__wa && typeof __wa.initData === 'string') ? __wa.initData : '';
+    // Override any existing getInitData() so headers/body use the canonical string
+    window.getInitData = function() { return __RAW_INIT; };
     if (tg && tg.colorScheme === 'dark') {
       document.documentElement.style.setProperty('--bg', '#0f0f10');
       document.documentElement.style.setProperty('--text', '#f6f7f9');
@@ -787,6 +792,23 @@
   });
 
   load();
+</script>
+</script>
+<script>
+(function initLogger() {
+  const wa = window.Telegram && window.Telegram.WebApp;
+  if (!wa) return;
+  const raw = wa.initData || '';
+  console.group('%c[TMA DEBUG] Telegram initData','color:#2b74ff;font-weight:bold');
+  console.log('RAW INITDATA:', raw);
+  console.log('LENGTH:', raw.length);
+  console.groupEnd();
+
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;top:8px;left:8px;z-index:9999;background:#111;color:#0ff;font-size:11px;padding:4px 8px;border-radius:6px;';
+  el.textContent = 'initData len: ' + raw.length;
+  document.body.appendChild(el);
+})();
 </script>
 </body>
 </html>

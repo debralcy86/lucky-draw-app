@@ -1,6 +1,8 @@
 // server.js
 const express = require('express')
 const path    = require('path')
+const verifyTelegramInitData = require('./middleware/verifyTelegramInitData.cjs')
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || ''
 
 const app = express()
 
@@ -9,6 +11,9 @@ app.use((req, res, next) => {
   res.setHeader('ngrok-skip-browser-warning', 'true')
   next()
 })
+
+app.get('/webapp', verifyTelegramInitData(BOT_TOKEN), (req, res, next) => next())
+app.get('/', verifyTelegramInitData(BOT_TOKEN), (req, res, next) => next())
 
 // 2. Serve static assets from React’s build folder
 const buildPath = path.join(__dirname, 'build')

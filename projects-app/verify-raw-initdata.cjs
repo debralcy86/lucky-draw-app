@@ -1,0 +1,17 @@
+const fs = require('fs');
+const crypto = require('crypto');
+const raw = fs.readFileSync('raw.txt','utf8');
+const m = raw.match(/\?(.+)/s);
+const qs = m ? m[1] : raw;
+const parts = qs.split('&');
+const hashPart = parts.find(p=>p.startsWith('hash='));
+const reqHash = hashPart ? hashPart.split('=')[1] : '';
+const remaining = parts.filter(p=>!p.startsWith('hash=')).map(p=>decodeURIComponent(p));
+remaining.sort((a,b)=>a.split('=')[0].localeCompare(b.split('=')[0]));
+const dataCheck = remaining.join('\\n');
+const secret = crypto.createHmac('sha256','WebAppData').update(process.env.BOT_TOKEN||'').digest();
+const calc = crypto.createHmac('sha256', secret).update(dataCheck,'utf8').digest('hex');
+console.log('REQ_HASH:', reqHash);
+console.log('CALC:', calc);
+console.log('\\nDATA_CHECK_PREVIEW:');
+console.log(dataCheck);

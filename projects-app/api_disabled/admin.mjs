@@ -1,14 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
-import { validate, parse } from '@telegram-apps/init-data-node';
+import { verifyTelegramInitData } from '../api/_lib/telegramVerify.mjs';
 
 function isTmaAdmin(req) {
   const auth = req.headers.authorization || req.headers.Authorization || '';
   if (!auth.startsWith('tma ')) return false;
   const initData = auth.slice(4);
   try {
-    validate(initData, process.env.TELEGRAM_BOT_TOKEN);
-    const data = parse(initData);
-    const uid = data?.user?.id ? String(data.user.id) : '';
+    const check = verifyTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
+    if (!check.ok) return false;
+    const uid = check.userId ? String(check.userId) : '';
     const admins = (process.env.ADMIN_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
     return uid && admins.includes(uid);
   } catch { return false; }

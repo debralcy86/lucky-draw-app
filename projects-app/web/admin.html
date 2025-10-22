@@ -855,7 +855,10 @@ $("#depStatus").addEventListener("change", ()=>loadDeposits(true));
 (function(){
   // Remove any dim/overlay elements commonly used by that layout
   document.querySelectorAll('.overlay, #overlay, [data-overlay], .backdrop, .dim-bg').forEach(el => {
-    try { el.remove(); } catch {}
+    try {
+      console.log('[admin-ui] removing overlay element', el);
+      el.remove();
+    } catch {}
   });
 
   // Find a likely search input by id/name and coerce it to a text box
@@ -891,7 +894,9 @@ $("#depStatus").addEventListener("change", ()=>loadDeposits(true));
       t = setTimeout(async () => {
         try {
           const q = input.value.trim();
-          const res = await postJSON('/api/admin', { action: 'users', query: q });
+          console.log('[admin-ui] fetching users', q);
+          const res = await postJSON('/api/admin', { action: 'users', query: q }, authHeader(INITDATA));
+          console.log('[admin-ui] response users', res);
           if (res && res.ok !== false) renderUsers(res.users || res.rows || []);
         } catch (e) { /* silent */ }
       }, 250);

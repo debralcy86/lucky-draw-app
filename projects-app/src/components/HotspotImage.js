@@ -583,6 +583,11 @@ export default function HotspotImage({
               h.onChange(event.target.value);
             }
           };
+          const handleClick = (event) => {
+            if (typeof h.onClick === 'function') {
+              h.onClick(event);
+            }
+          };
           const baseInputStyle = {
             width: '100%',
             height: '100%',
@@ -612,6 +617,7 @@ export default function HotspotImage({
                   aria-label={h.ariaLabel || h.title || 'points'}
                   onChange={handleChange}
                   onBlur={h.onBlur}
+                  onClick={handleClick}
                   readOnly={h.readOnly}
                   disabled={h.disabled}
                   inputMode={h.inputMode}

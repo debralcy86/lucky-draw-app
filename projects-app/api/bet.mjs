@@ -98,18 +98,20 @@ async function handler(req, res) {
   const auth = req.headers.authorization || '';
   if (!auth.startsWith('tma ')) return bad(res, 'missing_tma');
   const initData = auth.slice(4);
-  const verify = verifyInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
+  const verify = verifyInitData(initData, process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN);
   if (!verify.ok) return bad(res, 'invalid_tma');
   const userId = verify.userId;
 
   const body = await readJSON(req);
-  let { drawId, figure, amount, group } = body || {};
-  const figureNumber = Number(figure);
-  amount = Number(amount);
-  if (!Number.isInteger(figureNumber) || figureNumber < 1 || figureNumber > 36) return bad(res, 'missing_or_invalid_figure');
-  const groupCode = typeof group === 'string' ? group.trim().toUpperCase() : 'A';
-  if (!GROUP_CODES.includes(groupCode)) return bad(res, 'invalid_group_code');
-  if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'invalid_amount');
+
+  // support both single and multiple bet entries
+  const betsArray = Array.isArray(body?.bets) ? body.bets : [body];
+  const validBets = betsArray.filter(b => Number(b.amount) > 0 && Number.isInteger(Number(b.figure)));
+  if (!validBets.length) return bad(res, 'invalid_bets_payload');
+
+  let { drawId } = body || {};
+  // Per-bet validation is handled inside the loop below.
+  // We intentionally skip single-bet preflight checks here to support multi-bet payloads.
 
   const found = await lookupOpenDraw(supabase, drawId);
   if (found.error) {
@@ -121,43 +123,42 @@ async function handler(req, res) {
 
   const w0 = await fetchWallet(supabase, userId);
   if (w0.error) return err(res, 'wallet_lookup_failed');
-  const currentBalance = Number(w0.data?.balance ?? 0);
-  if (currentBalance < amount) return bad(res, 'insufficient_balance', { balance: currentBalance });
+  let currentBalance = Number(w0.data?.balance ?? 0);
 
-  const debit = await adjustWalletBalance(supabase, {
-    userId,
-    delta: -Math.abs(amount),
-    note: `bet:${groupCode}:${drawId}:${figureNumber}`,
-  });
-  if (debit.error) {
-    if (debit.code === 'insufficient_balance') return bad(res, 'insufficient_balance');
-    return err(res, debit.code || 'wallet_update_failed');
-  }
-    const inserted = await insertBetWithFallback(supabase, {
-    user_id: userId,
-    draw_id: drawId,
-    group_code: groupCode,
-    figure: figureNumber,
-    amount,
-  });
-
-  if (inserted.error) {
-    await adjustWalletBalance(supabase, {
+  let insertedAll = [];
+  for (const b of validBets) {
+    const figNum = parseInt(b.figure, 10);
+    const amt = Number(b.amount);
+    const grp = (b.group || 'A').toUpperCase();
+    if (!GROUP_CODES.includes(grp)) return bad(res, 'invalid_group_code');
+    if (!Number.isInteger(figNum) || figNum < 1 || figNum > 36) return bad(res, 'missing_or_invalid_figure');
+    if (!Number.isFinite(amt) || amt <= 0) return bad(res, 'invalid_amount');
+    if (currentBalance < amt) return bad(res, 'insufficient_balance', { balance: currentBalance });
+    const debit = await adjustWalletBalance(supabase, {
       userId,
-      delta: Math.abs(amount),
-      note: `bet_rollback:${groupCode}:${drawId}:${figureNumber}`,
+      delta: -Math.abs(amt),
+      note: `bet:${grp}:${drawId}:${figNum}`,
     });
-    return err(res, 'bet_insert_failed', { detail: String(inserted.error.message || inserted.error) });
+    if (debit.error) return err(res, debit.code || 'wallet_update_failed');
+    currentBalance = Number(debit.balance ?? currentBalance);
+    const inserted = await insertBetWithFallback(supabase, {
+      user_id: userId,
+      draw_id: drawId,
+      group_code: grp,
+      figure: figNum,
+      amount: amt,
+    });
+    if (inserted.error) {
+      await adjustWalletBalance(supabase, {
+        userId,
+        delta: Math.abs(amt),
+        note: `bet_rollback:${grp}:${drawId}:${figNum}`,
+      });
+      return err(res, 'bet_insert_failed', { detail: String(inserted.error.message || inserted.error) });
+    }
+    insertedAll.push(inserted.data);
   }
-
-    const betOut = inserted.data ? {
-    ...inserted.data,
-    figure_label: inserted.data.group_code && inserted.data.figure
-      ? `${inserted.data.group_code}#${inserted.data.figure}`
-      : inserted.data.figure
-  } : null;
-
-  return ok(res, { rid: rid(), bet: betOut, balance: debit.balance, draw });
+  return ok(res, { rid: rid(), bets: insertedAll, balance: currentBalance, draw });
 }
 
 export default withCors(handler, { methods: ['POST', 'OPTIONS'] });

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TMA initData verifier</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 20px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  .row { margin: 8px 0; }
+  textarea { width: 100%; height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; padding: 10px; border-radius: 6px; }
+  .ok { color: #0a7d28; font-weight: 600; }
+  .bad { color: #c91919; font-weight: 600; }
+  button { padding: 8px 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+</style>
+<h1>Telegram Mini App — initData verifier</h1>
+
+<div class="row"><button id="btn">Run check</button></div>
+
+<div class="row"><strong>initData (raw):</strong>
+  <textarea id="initRaw" readonly></textarea>
+</div>
+
+<div class="row"><strong>Keys detected:</strong>
+  <pre id="keys"></pre>
+</div>
+
+<div class="row"><strong>data_check_string (server format):</strong>
+  <pre id="dcs"></pre>
+</div>
+
+<div class="row"><strong>/api/whoami response:</strong>
+  <pre id="resp"></pre>
+</div>
+
+<script>
+(async function () {
+  function getInitDataFromSDK() {
+    try {
+      const ok = !!(window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.initData === 'string');
+      return ok ? window.Telegram.WebApp.initData : '';
+    } catch (_) { return ''; }
+  }
+
+  async function run() {
+    const initData = getInitDataFromSDK();
+    document.getElementById('initRaw').value = initData || '(empty)';
+
+    if (!initData) {
+      document.getElementById('resp').textContent =
+        'Telegram.WebApp.initData is empty. Open this page inside the Telegram Mini App.';
+      document.getElementById('keys').textContent = '';
+      document.getElementById('dcs').textContent = '';
+      return;
+    }
+
+    const sp = new URLSearchParams(initData);
+    const provided = sp.get('hash') || '';
+    sp.delete('hash');
+    sp.delete('signature');
+    const keys = Array.from(sp.keys()).sort();
+    const dcs = keys.map(k => `${k}=${sp.get(k) ?? ''}`).join('\n');
+
+    document.getElementById('keys').textContent = JSON.stringify(keys, null, 2);
+    document.getElementById('dcs').textContent = dcs;
+
+    const rid = 'tma-' + Date.now();
+    try {
+      const res = await fetch('/api/whoami', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'tma ' + initData,
+          'X-Debug-RID': rid
+        },
+        body: JSON.stringify({ initData })
+      });
+      const json = await res.json().catch(() => ({}));
+      const status = res.ok ? 'ok' : 'bad';
+      document.getElementById('resp').innerHTML =
+        `<span class="${status}">${res.status} ${res.statusText}</span>\n` +
+        JSON.stringify(json, null, 2) +
+        `\nRID: ${rid}`;
+      console.log('[whoami]', res.status, json, 'RID:', rid);
+    } catch (err) {
+      document.getElementById('resp').textContent = 'Request error: ' + (err && err.message || String(err));
+      console.error('[whoami] Error', err);
+    }
+  }
+
+  document.getElementById('btn').addEventListener('click', run);
+  if (document.visibilityState === 'visible') run();
+})();
+</script>
+</html>

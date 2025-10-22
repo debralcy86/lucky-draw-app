@@ -268,43 +268,7 @@ export function verifyTelegramInitData(initDataRaw, botToken) {
       .digest();
 
     if (compareHashes(parsed.providedHash, expectedBuffer)) {
-      let user = null;
-      let authDate = null;
-      try {
-        if (parsed.payload && typeof parsed.payload.user === 'string' && parsed.payload.user.length) {
-          user = JSON.parse(parsed.payload.user);
-        }
-      } catch (err) {
-        if (process.env.TMA_DEBUG === '1') {
-          console.error('[tma-verify] JSON.parse(user) failed', err);
-        }
-      }
-
-      const authRaw = parsed.payload ? parsed.payload.auth_date : null;
-      if (authRaw != null && authRaw !== '') {
-        const n = Number(authRaw);
-        if (Number.isFinite(n)) authDate = n;
-      }
-
-      const paramsObject = { ...parsed.payload };
-      const userId =
-        (user && (user.id ?? user.user_id ?? (user.user && user.user.id))) ??
-        paramsObject.user_id ??
-        null;
-
-      return {
-        ok: true,
-        mode: candidate === secretCandidates[0] ? 'webappdata' : 'legacy',
-        reason: 'hash_match',
-        user,
-        userId,
-        authDate,
-        payload: paramsObject,
-        params: paramsObject,
-        dataCheckString: parsed.dataCheckString,
-        hash: parsed.providedHash,
-        tag: 'telegramVerify/hmac-sha256-2025-10',
-      };
+      return { ok: true, mode: candidate === secretCandidates[0] ? 'webappdata' : 'legacy', reason: 'hash_match' };
     }
   }
 

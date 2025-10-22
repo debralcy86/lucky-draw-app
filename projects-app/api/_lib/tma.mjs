@@ -1,3 +1,71 @@
+import { createHmac, createHash } from 'crypto';
+
+function safeDecode(component) {
+  if (component == null) return '';
+  const str = String(component);
+  if (!str) return '';
+  try {
+    return decodeURIComponent(str.replace(/\+/g, '%20'));
+  } catch {
+    return str;
+  }
+}
+
+export async function verifyTelegramInitData(initDataRaw, botToken) {
+  if (!initDataRaw) return { ok: false, reason: 'missing_init_data' };
+  if (!botToken) return { ok: false, reason: 'missing_bot_token' };
+
+  const rawParams = new URLSearchParams(initDataRaw);
+  const params = new URLSearchParams();
+  for (const [k, v] of rawParams.entries()) {
+    const decodedKey = safeDecode(k);
+    let decodedVal = safeDecode(v);
+    if (typeof decodedVal === 'string' && decodedVal[0] === '{') {
+      // preserve Telegram's escaped forward slashes inside JSON-like values
+      decodedVal = decodedVal.replace(/\//g, '\\/');
+    }
+    params.set(decodedKey, decodedVal);
+  }
+
+  const hash = params.get('hash') || '';
+  if (!hash) return { ok: false, reason: 'missing_hash' };
+
+  const keys = [];
+  for (const [key] of params.entries()) if (key !== 'hash' && key !== 'signature') keys.push(key);
+  keys.sort();
+
+  const dataCheckString = keys.map(k => {
+    let v = params.get(k) ?? '';
+    return `${k}=${v}`;
+  }).join('\n');
+
+  const secretKey = createHash('sha256').update(botToken, 'utf8').digest();
+  const expectedHash = createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+  if (expectedHash !== hash) {
+    return { ok: false, reason: 'hash_mismatch', providedHash: hash, expectedHash };
+  }
+
+  let userData;
+  try {
+    const userJson = params.get('user');
+    if (userJson) {
+      userData = JSON.parse(userJson);
+    }
+  } catch {
+    return { ok: false, reason: 'invalid_user_json' };
+  }
+
+  return {
+    ok: true,
+    userId: userData?.id,
+    isAdmin: userData?.is_admin,
+    keys,
+    providedHash: hash,
+    expectedHash,
+  };
+}
+
 import { withCors } from './cors.mjs';
 import { verifyTma } from './telegramVerify.mjs';
 import { decode as htmlDecode } from 'html-entities';
@@ -109,7 +177,8 @@ export function withTMA(handler, options = {}) {
       const tokensSource =
         botTokens ??
         process.env.TELEGRAM_BOT_TOKENS ??
-        process.env.TELEGRAM_BOT_TOKEN;
+        process.env.TELEGRAM_BOT_TOKEN ??
+        process.env.BOT_TOKEN;
 
       const verification = await verifyTma(initData, tokensSource);
 
@@ -122,11 +191,18 @@ export function withTMA(handler, options = {}) {
           const sp = new URLSearchParams(initData);
           const provided = sp.get('hash') || '';
           sp.delete('hash');
+          sp.delete('signature');
           const dcsA = Array.from(sp.entries()).map(([k,v]) => `${k}=${v}`).sort().join('\n');
           const dcsAsha = (await import('crypto')).createHash('sha256').update(dcsA, 'utf8').digest('hex').slice(0,12);
           const pairs = String(initData).split('&');
           let provB=''; const kept=[];
-          for (const p of pairs){ const i=p.indexOf('='); const k=i===-1?p:p.slice(0,i); if(k==='hash'){ provB=i===-1?'':p.slice(i+1); continue;} kept.push({k,raw:p}); }
+          for (const p of pairs) {
+            const i = p.indexOf('=');
+            const k = i === -1 ? p : p.slice(0, i);
+            if (k === 'hash') { provB = i === -1 ? '' : p.slice(i + 1); continue; }
+            if (k === 'signature') { continue; }
+            kept.push({ k, raw: p });
+          }
           kept.sort((a,b)=>a.k.localeCompare(b.k));
           const dcsB = kept.map(x=>x.raw).join('\n');
           const dcsBsha = (await import('crypto')).createHash('sha256').update(dcsB, 'utf8').digest('hex').slice(0,12);

@@ -131,6 +131,27 @@ async function profileHandler(req, res) {
 
     let profileRow = existingProfile || null;
 
+    // Auto-create minimal profile record if none exists
+    if (!profileRow) {
+      const newProfile = {
+        user_id: userId,
+        name: verifiedUser?.first_name || `User-${userId}`,
+        contact: '',
+        withdraw_method: 'bank',
+        withdraw_dest: null,
+        withdraw_holder: null,
+        pin_hash: '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      const { error: insertErr } = await sb.from('profiles').insert(newProfile);
+      if (insertErr) {
+        console.error('profile_autocreate_error', { rid: requestId, error: insertErr.message });
+      } else {
+        profileRow = newProfile;
+      }
+    }
+
     const needsProfileSave = profilePayload.name !== undefined
       || profilePayload.contact !== undefined
       || profilePayload.pin !== undefined;
@@ -168,7 +189,10 @@ async function profileHandler(req, res) {
         name: profilePayload.name !== undefined ? profilePayload.name : (profileRow?.name || ''),
         contact: profilePayload.contact !== undefined ? profilePayload.contact : (profileRow?.contact || ''),
         updated_at: new Date().toISOString(),
-        withdraw_method: profilePayload.withdrawMethod !== undefined ? (profilePayload.withdrawMethod || null) : (profileRow?.withdraw_method || null),
+        withdraw_method:
+          profilePayload.withdrawMethod !== undefined
+            ? (['bank','ewallet','agent'].includes(profilePayload.withdrawMethod) ? profilePayload.withdrawMethod : 'bank')
+            : (['bank','ewallet','agent'].includes(profileRow?.withdraw_method) ? profileRow.withdraw_method : 'bank'),
         withdraw_dest: profilePayload.withdrawDest !== undefined ? (profilePayload.withdrawDest || null) : (profileRow?.withdraw_dest || null),
         withdraw_holder: profilePayload.withdrawHolder !== undefined ? (profilePayload.withdrawHolder || null) : (profileRow?.withdraw_holder || null),
         pin_hash: pinHash,

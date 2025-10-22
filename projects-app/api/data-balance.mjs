@@ -1,7 +1,7 @@
 export const config = { runtime: 'nodejs' };
 
 import { Buffer } from 'node:buffer';
-import { validate, parse } from '@telegram-apps/init-data-node';
+import { verifyTelegramInitData } from './_lib/telegramVerify.mjs';
 import { withCors } from './_lib/cors.mjs';
 import {
   createServiceClient,
@@ -48,18 +48,19 @@ async function handler(req, res) {
         return send(res, 401, { ok: false, rid: requestId, error: 'missing_tma_header' });
       }
       const initData = authHeader.slice(4);
-      try {
-        validate(initData, process.env.TELEGRAM_BOT_TOKEN);
-      } catch (e) {
-        return send(res, 401, { ok: false, rid: requestId, error: 'invalid_init_data' });
+      const verification = verifyTelegramInitData(
+        initData,
+        process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN
+      );
+      if (!verification.ok) {
+        return send(res, 401, {
+          ok: false,
+          rid: requestId,
+          error: 'invalid_init_data',
+          reason: verification.reason || 'verify_failed',
+        });
       }
-      let parsed;
-      try {
-        parsed = parse(initData);
-      } catch (e) {
-        return send(res, 400, { ok: false, rid: requestId, error: 'parse_failed' });
-      }
-      const userId = parsed?.user?.id ? String(parsed.user.id) : '';
+      const userId = verification.userId ? String(verification.userId) : '';
       if (!userId) {
         return send(res, 401, { ok: false, rid: requestId, error: 'no_user_in_initdata' });
       }
@@ -147,9 +148,14 @@ async function handler(req, res) {
         if (authHeader.startsWith('tma ')) {
           const initData = authHeader.slice(4);
           try {
-            validate(initData, process.env.TELEGRAM_BOT_TOKEN);
-            const parsed = parse(initData);
-            const uid = parsed?.user?.id ? String(parsed.user.id) : '';
+            const verification = verifyTelegramInitData(
+              initData,
+              process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN
+            );
+            if (!verification.ok) {
+              throw new Error(verification.reason || 'verify_failed');
+            }
+            const uid = verification.userId ? String(verification.userId) : '';
             const adminList = (process.env.ADMIN_USER_IDS || '')
               .split(',')
               .map(s => s.trim())

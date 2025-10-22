@@ -1,6 +1,29 @@
 {
+  "version": 2,
+  "installCommand": "npm ci || npm install",
+  "buildCommand": "CI= npm run build",
+  "outputDirectory": "build",
   "rewrites": [
-    { "source": "/api/register", "destination": "/api/auth" },
-    { "source": "/api/login", "destination": "/api/auth" }
+    { "source": "/api/register", "destination": "/api/auth/register" },
+    { "source": "/api/login", "destination": "/api/auth/login" },
+    { "source": "/api/whoami", "destination": "/api/app?action=whoami" },
+    { "source": "/api/data-balance", "destination": "/api/app?action=data_balance" },
+    { "source": "/api/bet", "destination": "/api/app?action=bet" },
+    { "source": "/api/withdraw-create", "destination": "/api/app?action=withdraw_create" },
+    { "source": "/api/profile", "destination": "/api/app?action=profile" },
+    { "source": "/api/open-draw", "destination": "/api/app?action=open_draw" },
+    { "source": "/api/debug-init-echo", "destination": "/api/app?action=debug_init_echo" },
+    { "source": "/api/admin-metrics", "destination": "/api/admin?action=metrics" },
+    { "source": "/api/admin-draw-exec", "destination": "/api/admin?action=draw_exec" },
+    { "source": "/api/admin-txns", "destination": "/api/admin?action=txns" },
+    { "source": "/api/admin-withdraws", "destination": "/api/admin?action=withdraws" },
+    { "source": "/api/admin-withdraw-update", "destination": "/api/admin?action=withdraw_update" },
+    { "source": "/api/admin-credit", "destination": "/api/admin?action=admin_credit" },
+    { "source": "/api/admin/(.*)", "destination": "/api/admin?action=$1" },
+    { "source": "/api/board", "destination": "/api/board" },
+    { "source": "/api/board-stream", "destination": "/api/board?stream=1" },
+    { "source": "/api/board/(.*)", "destination": "/api/board?path=$1" },
+    { "source": "/web/(.*)", "destination": "/web/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

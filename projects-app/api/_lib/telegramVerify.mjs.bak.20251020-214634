@@ -182,8 +182,11 @@ function parseInitData(initDataRaw) {
     const rawValue = eq === -1 ? '' : part.slice(eq + 1);
     const key = safeDecode(rawKey);
     let value = safeDecode(rawValue);
-  // NOTE: Do not mutate decoded values. Telegram data_check_string must use the exact
-  // URL-decoded values as received. No extra escaping (e.g., forward slashes) allowed.
+    if (typeof value === 'string' && value[0] === '{') {
+      // preserve Telegram's escaped forward slashes inside JSON-like values
+      value = value.replace(/\//g, '\\/');
+    }
+
     if (key === 'hash') {
       providedHash = value || '';
       continue;
@@ -261,54 +264,71 @@ export function verifyTelegramInitData(initDataRaw, botToken) {
     }
   }
 
-  for (const candidate of secretCandidates) {
-    const expectedBuffer = crypto
-      .createHmac('sha256', candidate)
+  for (const [idx, secret] of secretCandidates.entries()) {
+    const expected = crypto
+      .createHmac('sha256', secret)
       .update(parsed.dataCheckString, 'utf8')
       .digest();
 
-    if (compareHashes(parsed.providedHash, expectedBuffer)) {
-      let user = null;
-      let authDate = null;
+    if (!compareHashes(parsed.providedHash, expected)) {
+      continue;
+    }
+
+    let user = null;
+    let authDate = null;
+
+    const userRaw = parsed.payload.user;
+    if (userRaw) {
       try {
-        if (parsed.payload && typeof parsed.payload.user === 'string' && parsed.payload.user.length) {
-          user = JSON.parse(parsed.payload.user);
-        }
+        user = JSON.parse(userRaw);
       } catch (err) {
         if (process.env.TMA_DEBUG === '1') {
           console.error('[tma-verify] JSON.parse(user) failed', err);
         }
       }
-
-      const authRaw = parsed.payload ? parsed.payload.auth_date : null;
-      if (authRaw != null && authRaw !== '') {
-        const n = Number(authRaw);
-        if (Number.isFinite(n)) authDate = n;
-      }
-
-      const paramsObject = { ...parsed.payload };
-      const userId =
-        (user && (user.id ?? user.user_id ?? (user.user && user.user.id))) ??
-        paramsObject.user_id ??
-        null;
-
-      return {
-        ok: true,
-        mode: candidate === secretCandidates[0] ? 'webappdata' : 'legacy',
-        reason: 'hash_match',
-        user,
-        userId,
-        authDate,
-        payload: paramsObject,
-        params: paramsObject,
-        dataCheckString: parsed.dataCheckString,
-        hash: parsed.providedHash,
-        tag: 'telegramVerify/hmac-sha256-2025-10',
-      };
     }
+
+    const authRaw = parsed.payload.auth_date;
+    if (authRaw != null && authRaw !== '') {
+      const n = Number(authRaw);
+      if (Number.isFinite(n)) {
+        authDate = n;
+      }
+    }
+
+    const paramsObject = { ...parsed.payload };
+    const userId =
+      (user && (user.id ?? user.user_id ?? user.user?.id)) ??
+      paramsObject.user_id ??
+      null;
+
+    const mode = idx === 0 ? 'webappdata' : 'legacy-sha256';
+
+    return {
+      ok: true,
+      user,
+      userId,
+      authDate,
+      payload: paramsObject,
+      params: paramsObject,
+      tokenUsed: token,
+      dataCheckString: parsed.dataCheckString,
+      hash: parsed.providedHash,
+      mode,
+      tag: 'telegramVerify/hmac-sha256-2025-10',
+    };
   }
 
-  return { ok: false, reason: 'hash_mismatch' };
+  if (process.env.TMA_DEBUG === '1') {
+    try {
+      console.log('[tma-verify][hash-mismatch]', {
+        providedPrefix: parsed.providedHash?.slice(0, 12),
+        dcsPreview: parsed.dataCheckString.slice(0, 160).replace(/\n/g, '\\n'),
+      });
+    } catch {}
+  }
+
+  return { ok: false, reason: 'hash_mismatch', dataCheckString: parsed.dataCheckString };
 }
 
 export function verifyTma(initDataRaw, tokensSource) {

@@ -1,0 +1,49 @@
+/*
+  Robust wrapper for @telegram-apps/init-data-node that supports:
+  - function default export
+  - named export verifyInitData
+  - default object with function
+  - namespace with verifyInitData
+*/
+let verifyInitData;
+const _initDataNode = require('@telegram-apps/init-data-node');
+
+if (typeof _initDataNode === 'function') {
+  verifyInitData = _initDataNode;
+} else if (_initDataNode && typeof _initDataNode.verifyInitData === 'function') {
+  verifyInitData = _initDataNode.verifyInitData;
+} else if (_initDataNode && _initDataNode.default && typeof _initDataNode.default === 'function') {
+  verifyInitData = _initDataNode.default;
+} else if (_initDataNode && _initDataNode.default && typeof _initDataNode.default.verifyInitData === 'function') {
+  verifyInitData = _initDataNode.default.verifyInitData;
+} else {
+  throw new Error('unable to locate verifyInitData export from @telegram-apps/init-data-node');
+}
+
+function verifyTelegramInitData(botToken) {
+  return (req, res, next) => {
+    try {
+      const rawUrl = req.url || '';
+      const m = rawUrl.match(/\?(.+)/s);
+      let qs = m ? m[1] : '';
+      // percent-decode any encoded backslashes or other sequences
+      try { qs = decodeURIComponent(qs); } catch(e) { /* leave qs as-is if malformed */ }
+      // normalize escaped slashes coming from frontend (turn "\/" into "/")
+      // normalize escaped slashes coming from frontend (turn "\/" into "/")
+      qs = qs.replace(/\\\//g, '/');
+      // delegate verification to the official helper (throws on invalid)
+      const result = verifyInitData(qs, botToken || process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '');
+      // debug: print data_check_string, provided hash, and computed hash
+      console.log('[TMA-DEBUG] data_check_string:\n' + (result.dataCheckString || ''));
+      console.log('[TMA-DEBUG] provided hash: ' + (result.hashProvided || ''));
+      console.log('[TMA-DEBUG] computed hash: ' + (result.hash || ''));
+      req.telegramInit = { data_check_string: result.dataCheckString || '', hash: result.hash || '' };
+      return next();
+    } catch (err) {
+      console.error('[TMA-DEBUG] verification error:', err && err.stack ? err.stack : err);
+      res.statusCode = 401;
+      return res.end('invalid initData hash');
+    }
+  };
+}
+module.exports = verifyTelegramInitData;
