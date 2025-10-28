@@ -1,0 +1,10 @@
+html, body, #root { height: 100%; }
+body { margin: 0; background: #f7f7f7; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+.app { 
+  min-height: 100%; 
+  display: flex; 
+  justify-content: center; 
+  align-items: center; 
+  padding: 24px; 
+}

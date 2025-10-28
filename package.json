@@ -1,0 +1,23 @@
+{
+  "name": "lucky-draw-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "echo build",
+    "start": "node server.mjs",
+    "verify:init": "node verifyInitData.test.js",
+    "gen:init": "node scripts/gen-initdata.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "html-entities": "^2.6.0"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

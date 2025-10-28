@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Place a Bet</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;line-height:1.4}
+    label{display:block;margin:.5rem 0 .25rem}
+    input,button{font:inherit;padding:.5rem .65rem}
+    #out{white-space:pre-wrap;background:#f6f7f8;border:1px solid #e2e3e5;border-radius:8px;padding:12px;margin-top:12px}
+  </style>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+<body>
+
+  <h1>Place a Bet</h1>
+  <div id="tgDiag" style="position:sticky;top:0;z-index:9999;padding:8px;margin:8px 0;border-radius:6px;background:#111827;color:#e6edf3;font-size:12px;white-space:pre-wrap;box-shadow:0 2px 8px rgba(0,0,0,.25)">Awaiting Telegram SDK…</div>
+
+  <label>Draw ID</label>
+  <input id="drawId" type="text" placeholder="UUID e.g. 57a2fc47-…-69af04e74d1d" size="50"/>
+  <small id="drawMeta" style="display:block;margin-top:6px;color:#666"></small>
+  <div id="drawGroup" style="font-size:12px;color:#666;margin-top:4px;">Group: —</div>
+
+  <label for="groupPick" style="display:block;margin-top:8px;font-weight:600;">Choose Group</label>
+  <select id="groupPick" style="padding:6px 8px; margin-top:4px;">
+    <option value="A">Group A (00:00)</option>
+    <option value="B">Group B (06:00)</option>
+    <option value="C">Group C (12:00)</option>
+    <option value="D">Group D (18:00)</option>
+  </select>
+
+  <label>Figure (1–36)</label>
+  <input id="figure" type="number" min="1" max="36" value="7"/>
+
+  <label>Amount</label>
+  <input id="amount" type="number" min="1" step="1" value="10"/>
+
+  <div style="margin-top:12px">
+    <button id="btnSubmit" type="button">Submit Bet</button>
+  </div>
+
+  <pre id="result">Result will appear here…</pre>
+
+  <input id="points-A1" type="number" min="1" placeholder="points" />
+  <button data-bet="A:1" data-points-src="#points-A1">Place</button>
+
+  <div class="tag" style="margin-top:10px; font-size:12px; opacity:.7">
+    v: bet-02 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script>
+  </div>
+
+  <script type="module">
+    import { getInitData } from "/web/_tg.js";
+    console.log('TAG: bet-02');
+    // Diagnostic output
+    const tgDiagEl = document.getElementById('tgDiag');
+    try {
+      const hasTG = !!window.Telegram;
+      const hasWebApp = !!window.Telegram?.WebApp;
+      const initRaw = window.Telegram?.WebApp?.initData || "";
+      const initLen = initRaw.length;
+      const initFromHelper = await getInitData({ retries: 8, delayMs: 150 });
+      const initFromHelperLen = (initFromHelper || "").length;
+
+      const info = {
+        host: location.host,
+        href: location.href,
+        ua: navigator.userAgent,
+        hasTelegram: hasTG,
+        hasWebApp: hasWebApp,
+        initDataLen: initLen,
+        helperLen: initFromHelperLen,
+        initDataRawHead: initRaw.slice(0, 80)
+      };
+      tgDiagEl.textContent = JSON.stringify(info, null, 2);
+      console.log('[tg-diag]', info);
+
+      // Optional nudge to surface clearly during testing
+      if (!initFromHelperLen) {
+        setTimeout(() => {
+          try { alert('Telegram initData not detected. Check that you opened via the WebApp composer button and that no redirect changed the origin.'); } catch {}
+        }, 200);
+      }
+    } catch (e) {
+      tgDiagEl.textContent = 'Diag error: ' + e;
+      console.error('[tg-diag:error]', e);
+    }
+
+    const API = '/api/bet';
+
+    // getInitData() is provided by /web/_tg.js
+
+    function show(obj) {
+      document.getElementById('result').textContent =
+        typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    document.getElementById('btnSubmit').onclick = async () => {
+      const payload = {
+        initData: await getInitData({ retries: 8, delayMs: 150 }),
+        drawId: document.getElementById('drawId').value.trim(),
+        figure: Number(document.getElementById('figure').value),
+        amount: Number(document.getElementById('amount').value)
+      };
+      show('Submitting…');
+      try {
+        const res = await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json().catch(() => ({}));
+        show({ status: res.status, ...json });
+      } catch (e) {
+        show(String(e));
+      }
+    };
+  </script>
+
+  <script type="module">
+    import { getInitData } from "/web/_tg.js";
+  const OPEN_DRAW_API = "/api/open-draw";
+
+  function deriveGroupFromCode(code = "") {
+    const m = String(code).match(/-(A|B|C|D)-/i);
+    return m ? m[1].toUpperCase() : "";
+  }
+
+  function fmtMYT(iso) {
+    try {
+      return new Intl.DateTimeFormat(
+        "en-MY",
+        { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kuala_Lumpur" }
+      ).format(new Date(iso));
+    } catch { return iso; }
+  }
+
+  async function bootstrapOpenDraw() {
+    const drawIdEl = document.getElementById("drawId");
+    const metaEl   = document.getElementById("drawMeta");
+    const groupEl  = document.getElementById("drawGroup");
+    const btn      = document.getElementById("btnSubmit");
+    const sel      = document.getElementById("groupPick");
+
+    // default disabled until we know
+    if (btn) btn.disabled = true;
+
+    async function fetchOpenDrawByGroup(group) {
+      const r = await fetch(`${OPEN_DRAW_API}?group=${encodeURIComponent(group)}`);
+      return r.json();
+    }
+
+    function setGroupUI(group) {
+      if (groupEl) groupEl.textContent = `Group: ${group || '—'}`;
+      if (sel) sel.value = group || 'A';
+    }
+
+    async function loadGroup(group) {
+      const g = String(group || 'A').toUpperCase();
+      if (btn) btn.disabled = true;
+      if (metaEl) metaEl.textContent = 'Loading…';
+      try {
+        const j = await fetchOpenDrawByGroup(g);
+        const draw = j && j.open ? j.open : null;
+        if (!draw) {
+          if (drawIdEl) drawIdEl.value = '';
+          if (metaEl) metaEl.textContent = `No open draw for Group ${g} right now.`;
+          setGroupUI(g);
+          return;
+        }
+        // populate
+        if (drawIdEl) drawIdEl.value = draw.id;
+        if (metaEl) metaEl.textContent = `Code: ${draw.code} • Scheduled: ${fmtMYT(draw.scheduled_at)}`;
+        const gg = (draw.group || deriveGroupFromCode(draw.code) || g || '—').toUpperCase();
+        setGroupUI(gg);
+        if (btn) btn.disabled = false;
+      } catch {
+        if (metaEl) metaEl.textContent = `Failed to load Group ${g}.`;
+        setGroupUI(g);
+      }
+    }
+
+    try {
+      const res = await fetch(OPEN_DRAW_API, { cache: "no-store" });
+      const json = await res.json();
+      const open = (json && json.ok) ? json.open : null;
+
+      if (open) {
+        drawIdEl.value = open.id;
+        if (metaEl) {
+          metaEl.textContent = `Open draw: ${open.code} • ${fmtMYT(open.scheduled_at)}`;
+          metaEl.style.color = "#0a7";
+        }
+        if (groupEl) {
+          const g = open.group || deriveGroupFromCode(open.code) || "—";
+          groupEl.textContent = `Group: ${g}`;
+          if (sel) sel.value = g;
+        }
+        if (btn) btn.disabled = false;
+      } else {
+        if (metaEl) {
+          metaEl.textContent = "No open draw right now — enter a Draw ID manually.";
+          metaEl.style.color = "#c33";
+        }
+        if (groupEl) groupEl.textContent = "Group: —";
+        if (sel) sel.value = 'A';
+      }
+    } catch (e) {
+      if (metaEl) {
+        metaEl.textContent = "Failed to load open draw — check network.";
+        metaEl.style.color = "#c33";
+      }
+      if (groupEl) groupEl.textContent = "Group: —";
+      if (sel) sel.value = 'A';
+    }
+
+    // React to group changes
+    if (sel) {
+      sel.addEventListener('change', (e) => {
+        const g = String(e.target.value || 'A').toUpperCase();
+        loadGroup(g).catch(console.error);
+        // Reconnect SSE to stream only this group's board
+        try { if (window.connectSSEForGroup) window.connectSSEForGroup(g); } catch {}
+      });
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", bootstrapOpenDraw);
+  </script>
+
+  <!-- Live Board (SSE-powered) -->
+  <section id="liveBoard" style="margin-top:16px;">
+    <h3 style="margin-bottom:8px;">Live Board</h3>
+
+    <!-- optional tiny CSS to keep styles scoped -->
+    <style>
+      .board-wrap { display:grid; gap:12px; grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .board-group { border:1px solid #ddd; border-radius:8px; padding:8px; }
+      .board-title { font-weight:600; margin-bottom:6px; }
+      .board-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:4px; }
+      .board-cell { border:1px solid #eee; border-radius:6px; padding:6px 4px; text-align:center; font-size:12px; }
+      .board-fig { display:block; font-weight:600; }
+      .board-sum { display:block; opacity:.9; }
+      /* live pulse */
+      #liveBoard.live-pulse { box-shadow: 0 0 0 0 rgba(16,185,129,.6); }
+      @keyframes livePulse {
+        0%   { box-shadow: 0 0 0 0 rgba(16,185,129,.6); }
+        70%  { box-shadow: 0 0 0 10px rgba(16,185,129,0); }
+        100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+      }
+      #liveBoard.live-pulse { animation: livePulse 700ms ease-out 1; border-radius: 10px; }
+    </style>
+
+    <div class="board-wrap">
+      <div class="board-group" data-group="A">
+        <div class="board-title">Group A</div>
+        <div class="board-grid" id="grid-A"></div>
+      </div>
+      <div class="board-group" data-group="B">
+        <div class="board-title">Group B</div>
+        <div class="board-grid" id="grid-B"></div>
+      </div>
+      <div class="board-group" data-group="C">
+        <div class="board-title">Group C</div>
+        <div class="board-grid" id="grid-C"></div>
+      </div>
+      <div class="board-group" data-group="D">
+        <div class="board-title">Group D</div>
+        <div class="board-grid" id="grid-D"></div>
+      </div>
+    </div>
+
+    <div id="boardMeta" style="margin-top:8px;font-size:12px;opacity:.8;"></div>
+
+    <script>
+      const SSE_BASE = '/api/board-stream';
+
+      function ensureGrid(groupId) {
+        const el = document.getElementById('grid-' + groupId);
+        if (!el) return;
+        if (el.childElementCount === 36) return;
+        el.innerHTML = '';
+        for (let i = 1; i <= 36; i++) {
+          const cell = document.createElement('div');
+          cell.className = 'board-cell';
+          cell.dataset.group = groupId;
+          cell.dataset.figure = String(i);
+          cell.innerHTML = `
+            <span class="board-fig">${i}</span>
+            <span class="board-sum" id="sum-${groupId}-${i}">0</span>
+          `;
+          el.appendChild(cell);
+        }
+      }
+
+      function renderGroupGrid(group, totals) {
+        const g = String(group || 'A').toUpperCase();
+        ensureGrid(g);
+        const arr = Array.isArray(totals) ? totals : [];
+        for (let i = 1; i <= 36; i++) {
+          const v = Number(arr[i-1] || 0);
+          const sumEl = document.getElementById(`sum-${g}-${i}`);
+          if (sumEl) sumEl.textContent = v;
+        }
+      }
+
+      function renderBoardMeta(meta) {
+        const info = document.getElementById('boardMeta');
+        if (info && meta) {
+          const draw = meta.draw ? `${meta.draw.code} (${meta.draw.id})` : '—';
+          info.textContent = `Open draw: ${draw} · grand_total: ${meta.grand_total}`;
+        }
+      }
+
+      async function loadOnce() {
+        try {
+          const r = await fetch('/api/board');
+          const j = await r.json();
+          if (j && j.groups) renderBoard(j.groups, { draw: j.draw, grand_total: j.grand_total });
+        } catch (e) {}
+      }
+
+      let pulseTimer = null;
+      function pulseLiveBoard() {
+        const el = document.getElementById('liveBoard');
+        if (!el) return;
+        el.classList.remove('live-pulse');
+        void el.offsetWidth; // restart animation
+        el.classList.add('live-pulse');
+        clearTimeout(pulseTimer);
+        pulseTimer = setTimeout(() => el.classList.remove('live-pulse'), 800);
+      }
+
+      let sse = null;
+      function connectSSEForGroup(group) {
+        if (sse) { try { sse.close(); } catch (e) {} sse = null; }
+        try {
+          sse = new EventSource(`${SSE_BASE}?group=${encodeURIComponent(group)}`);
+          sse.addEventListener('board', (ev) => {
+            try {
+              const data = JSON.parse(ev.data);
+              if (data && data.totals) {
+                renderGroupGrid(data.group, data.totals);
+                renderBoardMeta({ draw: data.draw, grand_total: data.grand_total });
+                if (data.cause === 'realtime') pulseLiveBoard();
+              }
+            } catch (_) {}
+          });
+          sse.addEventListener('error', () => { /* let it auto-reconnect */ });
+        } catch (e) {}
+      }
+
+      (function initLiveBoard(){
+        loadOnce();
+        const g = (document.getElementById('groupPick')?.value || 'A').toUpperCase();
+        connectSSEForGroup(g);
+      })();
+    </script>
+  </section>
+
+  <!-- Admin: Recent Bets (reuses same SSE) -->
+  <section id="adminRecent" style="margin-top:16px; display:none;">
+    <h3 style="margin-bottom:8px;">Recent Bets (Admin)</h3>
+    <div id="recentMeta" style="font-size:12px; opacity:.8; margin-bottom:6px;">Live feed</div>
+    <div class="recent-wrap">
+      <table style="width:100%; border-collapse:collapse; font-size:12px;">
+        <thead>
+          <tr>
+            <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Time</th>
+            <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Group</th>
+            <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Figure</th>
+            <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Amount</th>
+            <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">User</th>
+          </tr>
+        </thead>
+        <tbody id="recentBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const RECENT_MAX = 20;
+    const recentBuf = [];
+
+    function setAdminRecentVisible(show) {
+      const el = document.getElementById('adminRecent');
+      if (el) el.style.display = show ? '' : 'none';
+    }
+
+    function pushRecent(b) {
+      recentBuf.unshift(b);
+      if (recentBuf.length > RECENT_MAX) recentBuf.pop();
+      renderRecent();
+    }
+
+    const MYT_FMT = new Intl.DateTimeFormat('en-MY', {
+      dateStyle: 'short', timeStyle: 'medium', timeZone: 'Asia/Kuala_Lumpur'
+    });
+
+    function renderRecent() {
+      const tbody = document.getElementById('recentBody');
+      if (!tbody) return;
+      tbody.innerHTML = recentBuf.map(r => {
+        const dt = r.ts ? MYT_FMT.format(new Date(r.ts)) : '';
+        return `<tr>
+          <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${dt}</td>
+          <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${r.group}</td>
+          <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${r.figure}</td>
+          <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${Number(r.amount||0)}</td>
+          <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${r.user_mask||'****'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // whoami integration to toggle admin panel.
+    async function bootstrapAdmin() {
+      try {
+        const initData = (typeof getInitData === 'function') ? await getInitData({ retries: 8, delayMs: 150 }) : '';
+        const r = await fetch('/api/whoami', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ initData })
+        });
+        const j = await r.json().catch(() => ({}));
+        window.__isAdmin = Boolean(j.isAdmin);
+        setAdminRecentVisible(window.__isAdmin === true);
+      } catch {}
+    }
+
+    function connectRecentSSE() {
+      try {
+        const es = new EventSource('/api/board-stream');
+        es.addEventListener('board', (ev) => {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data && data.last_bet && window.__isAdmin === true) {
+              pushRecent(data.last_bet);
+            }
+          } catch (_) {}
+        });
+        es.addEventListener('error', () => {});
+      } catch (e) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      bootstrapAdmin().then(() => {
+        if (window.__isAdmin === true) connectRecentSSE();
+      });
+    });
+  </script>
+
+  <script>
+    // Ensure Telegram WebApp uses full height
+    (function() {
+      function expandIfReady() {
+        try {
+          if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+          }
+        } catch (e) {}
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', expandIfReady);
+      } else {
+        expandIfReady();
+      }
+    })();
+  </script>
+<script type="module">
+  import { go } from '/web/_nav.js';
+
+  document.querySelectorAll('[data-link]').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      go(a.getAttribute('data-link'));
+    });
+  });
+</script>
+
+<!-- Example buttons/links you can place anywhere on the page: -->
+<!-- <button data-link="/web/telegram-wallet.html">Wallet</button>
+<button data-link="/web/board.html">Board</button>
+<button data-link="/web/admin.html">Admin</button> -->
+<script type="module">
+  import { requireTelegramBanner } from '/web/_guard.js';
+  requireTelegramBanner();
+</script>
+<!-- Optional quick links:
+<button data-link="/web/bet.html">Bet</button>
+<button data-link="/web/telegram-wallet.html">Wallet</button> -->
+<script type="module">
+  import { placeBet } from '/web/_api.js';
+  import { toast, spinner } from '/web/_ui.js';
+
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-bet]');
+    if (!btn) return;
+    const [group, figureStr] = String(btn.dataset.bet || '').split(':');
+    const pointsEl = btn.dataset.pointsSrc ? document.querySelector(btn.dataset.pointsSrc) : null;
+    const points = Math.max(0, Math.floor(Number(pointsEl?.value || btn.dataset.points || 0)));
+    if (!group || !figureStr) return toast('Missing group/figure');
+    if (!points) return toast('Enter points');
+
+    btn.disabled = true; spinner(true);
+    try {
+      const { ok, json } = await placeBet({ group, figure: Number(figureStr), points });
+      if (!ok) throw new Error(json?.error || 'Bet failed');
+      toast('Bet placed!');
+      pointsEl && (pointsEl.value = '');
+    } catch (e) {
+      toast(e.message || 'Bet error');
+    } finally {
+      btn.disabled = false; spinner(false);
+    }
+  });
+</script>
+</body>
+</html>
+

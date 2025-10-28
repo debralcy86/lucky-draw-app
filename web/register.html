@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Register · Lucky Draw</title>
+  <!-- Telegram WebApp SDK (required to populate window.Telegram.WebApp.initData) -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115; --fg:#e5e7eb; --muted:#9aa0a6; --accent:#60a5fa;
+      --card:#151823; --border:#23273a; --err:#ef4444; --ok:#22c55e;
+    }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+           background:var(--bg); color:var(--fg); }
+    html, body { height: 100%; }
+    main { min-height: 100dvh; }
+    .wrap { max-width: 520px; margin: 32px auto; padding: 20px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow: 0 8px 20px rgba(0,0,0,.25); }
+    h1 { margin:0 0 6px 0; font-size: 22px; }
+    p.muted { margin: 0 0 16px 0; color: var(--muted); font-size: 14px; }
+    .row { display:flex; flex-direction:column; gap:6px; margin:12px 0; }
+    label { font-size:13px; color:var(--muted); }
+    input { background:#0c0f16; color:var(--fg); border:1px solid var(--border); border-radius:10px; padding:12px 12px; font-size:16px; outline:none; }
+    input:focus { border-color:#334155; }
+    .btn { width:100%; margin-top: 12px; padding: 12px 16px; border:0; border-radius:12px; background:var(--accent); color:#0b1220; font-weight:700; font-size:16px; cursor:pointer; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .note { margin-top:10px; font-size:13px; color:var(--muted); }
+    .tag { display:inline-block; margin-top:8px; font-size:12px; opacity:.7 }
+    .err { color: var(--err); font-size: 13px; margin-top: 6px; }
+    .ok { color: var(--ok); font-size: 13px; margin-top: 6px; }
+    .divider { height:1px; background:var(--border); margin:16px 0; }
+    .uid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#93c5fd; }
+  </style>
+  <script type="module" src="/web/_tg.js"></script>
+</head>
+<body>
+<form id="register-form" novalidate>
+  <label>Full name<br/>
+    <input id="fullName" placeholder="Full name" required />
+  </label>
+  <div class="hint" style="color:#c00;font-size:12px;margin-top:4px"></div>
+
+  <label>Email (optional)<br/>
+    <input id="email" placeholder="name@example.com" />
+  </label>
+  <div class="hint" style="color:#c00;font-size:12px;margin-top:4px"></div>
+
+  <label>Phone (optional)<br/>
+    <input id="phone" placeholder="+60 12 345 6789" />
+  </label>
+  <div class="hint" style="color:#c00;font-size:12px;margin-top:4px"></div>
+
+  <label>PIN (4–6 digits)<br/>
+    <input id="pin-top" placeholder="1234" inputmode="numeric" minlength="4" maxlength="6" required />
+  </label>
+  <div class="hint" style="color:#c00;font-size:12px;margin-top:4px"></div>
+
+  <button type="submit">Save</button>
+</form>
+
+  <div class="wrap">
+    <div class="card">
+      <h1>Set up your profile</h1>
+      <p class="muted">New users: enter your details to continue. Existing users will be redirected automatically.</p>
+
+      <div id="status" class="note">Checking your Telegram session…</div>
+      <div class="divider"></div>
+      <div id="diag" class="note" style="display:none; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+           background:#0c0f16; border:1px solid var(--border); border-radius:10px; padding:10px; white-space:pre-wrap;
+           margin-bottom:12px;"></div>
+      <button id="btnTest" class="btn" type="button" style="margin-bottom:12px; display:none; background:#374151; color:#e5e7eb;">Test Session</button>
+
+      <form id="form" style="display:none">
+        <div class="row">
+          <label for="name">Name</label>
+          <input id="name" name="name" placeholder="e.g., Debra" autocomplete="name" required />
+        </div>
+        <div class="row">
+          <label for="contact">Contact Number</label>
+          <input id="contact" name="contact" placeholder="e.g., 012-3456789" inputmode="tel" autocomplete="tel" required />
+        </div>
+        <div class="row">
+          <label for="pin">Password / PIN</label>
+          <input id="pin" name="pin" placeholder="4–6 digits" inputmode="numeric" minlength="4" maxlength="6" required />
+        </div>
+        <button class="btn" id="saveBtn" type="submit">Save & Continue</button>
+        <div id="msg" class=""></div>
+        <div class="tag">v: register-04 · bot: <script>document.write(window.tgBot?.botUsername || 'Unknown')</script></div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Minimal helper — only use Telegram WebApp injected value
+    function getInitData() {
+      try { return window.Telegram?.WebApp?.initData || ''; } catch { return ''; }
+    }
+
+    function goWallet() {
+      window.location.href = '/web/telegram-wallet.html?v=17';
+    }
+
+    async function postProfile(payload, initDataRaw) {
+      const hdr = initDataRaw ? { 'Authorization': `tma ${initDataRaw}` } : {};
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...hdr },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      return { ok: res.ok, status: res.status, json };
+    }
+
+    async function testSession(initData) {
+      const diag = document.getElementById('diag');
+      diag.style.display = '';
+      diag.textContent = 'Pinging /api/debug-init-echo…';
+      try {
+        const hdr = initData ? { 'Authorization': `tma ${initData}` } : {};
+        const res = await fetch('/api/debug-init-echo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...hdr },
+          body: JSON.stringify({ initData })
+        });
+        const out = await res.json().catch(() => ({}));
+        const lenLine = `client.len=${String(initData||'').length}`;
+        diag.textContent = `${lenLine}\n${JSON.stringify(out, null, 2)}`;
+      } catch (e) {
+        diag.textContent = 'Echo error: ' + (e?.message || e);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      try { window.Telegram?.WebApp?.ready?.(); window.Telegram?.WebApp?.expand?.(); } catch {}
+      console.log('TAG: register-04');
+      const status = document.getElementById('status');
+      const form = document.getElementById('form');
+      const msg = document.getElementById('msg');
+      const btn = document.getElementById('saveBtn');
+      const btnTest = document.getElementById('btnTest');
+      const diag = document.getElementById('diag');
+
+      // 1) Validate Telegram initData
+      const initData = getInitData();
+      console.log('RAW INITDATA (client):', initData);
+      try {
+        const keys = String(initData||'').split('&').map(p => p.split('=')[0]);
+        console.log('INITTABLE:', keys);
+      } catch {}
+      console.log('TAG: register-initData-len →', String(initData || '').length);
+
+      if (!initData || !initData.includes('hash=')) {
+        status.innerHTML = '<span class="err">Open this page from the Telegram Mini App (initData missing).</span>';
+        btnTest.style.display = '';
+        btnTest.textContent = 'Test Session (No initData)';
+        btnTest.onclick = () => testSession(getInitData());
+        diag.style.display = '';
+        diag.textContent = 'initData currently empty. Tap Test Session to see server response.';
+        return;
+      }
+
+      btnTest.style.display = '';
+      btnTest.textContent = 'Test Session';
+      btnTest.onclick = () => testSession(initData);
+
+      // 2) Check existing profile
+      status.textContent = 'Checking your profile…';
+      const check = await postProfile({ initData }, initData);
+      console.log('TAG: profile-check →', check);
+
+      // Always show a short diag summary
+      try {
+        const bodyLen = String(initData||'').length;
+        diag.style.display = '';
+        diag.textContent = `client.len=${bodyLen}\nstatus=${check.status}${check?.json?.rid?` rid=${check.json.rid}`:''}\n` +
+                           (check?.json?.error ? `error=${check.json.error}\n` : '') +
+                           (check?.json?.details ? `details=${check.json.details}\n` : '');
+      } catch {}
+
+      if (!check.ok) {
+        const detail = (check.json && (check.json.error || check.json.details)) ? ` (${check.json.error}${check.json.details ? ': ' + check.json.details : ''})` : '';
+        status.innerHTML = `<span class="err">Session check failed [HTTP ${check.status}]${detail}.<br/>initData.length=${String(initData).length}</span>`;
+        return;
+      }
+
+      // Existing user → redirect to Wallet
+      if (check.json && check.json.profile_exists) {
+        status.innerHTML = '<span class="ok">Profile found. Redirecting…</span>';
+        return goWallet();
+      }
+
+      // New user → show form
+      status.innerHTML = 'No profile found — please register below.';
+      form.style.display = '';
+
+      // 3) Handle save
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        msg.textContent = '';
+        msg.className = '';
+        btn.disabled = true;
+
+        const name = document.getElementById('name').value.trim();
+        const contact = document.getElementById('contact').value.trim();
+        const pin = document.getElementById('pin').value.trim();
+
+        if (!name || !contact || !pin) {
+          msg.textContent = 'Please complete all fields.';
+          msg.className = 'err';
+          btn.disabled = false;
+          return;
+        }
+
+        // Derive userId from Telegram (server will also verify)
+        let userId = null;
+        try {
+          const tgu = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
+          if (tgu && tgu.id) userId = String(tgu.id);
+        } catch {}
+
+        const payload = { initData, profile: { userId, name, contact, pin } };
+        const out = await postProfile(payload, initData);
+        console.log('TAG: profile-save →', out);
+
+        btn.disabled = false;
+
+        if (!out.ok || !out.json?.ok) {
+          msg.textContent = (out.json && out.json.error) ? ('Failed: ' + out.json.error) : 'Failed to save profile.';
+          msg.className = 'err';
+          return;
+        }
+
+        msg.textContent = 'Profile saved. Redirecting…';
+        msg.className = 'ok';
+        setTimeout(goWallet, 400);
+      });
+    });
+  </script>
+  <script>
+    // Ensure Telegram WebApp uses full height (safety net)
+    (function() {
+      function expandIfReady() {
+        try {
+          if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+          }
+        } catch (e) {}
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', expandIfReady);
+      } else {
+        expandIfReady();
+      }
+    })();
+  </script>
+<script type="module">
+  import { whoAmI, saveProfile } from '/web/_api.js';
+
+  const form   = document.getElementById('register-form');
+  const nameEl = document.getElementById('fullName');
+  const emailEl= document.getElementById('email');
+  const phoneEl= document.getElementById('phone');
+  const pinEl  = document.getElementById('pin-top');
+
+  async function init() {
+    const me = await whoAmI();
+    if (me.ok) {
+      if (nameEl && !nameEl.value) {
+        nameEl.value = me.json?.user?.first_name || '';
+      }
+      if (phoneEl && !phoneEl.value) {
+        const tel = me.json?.user?.phone_number || me.json?.user?.phone || '';
+        if (tel) phoneEl.value = tel;
+      }
+    }
+  }
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = nameEl?.value?.trim() || '';
+    const email = emailEl?.value?.trim() || '';
+    const phone = phoneEl?.value?.trim() || '';
+    const pin = pinEl?.value?.trim() || '';
+    const contact = phone || email;
+    const payload = {
+      profile: {
+        name,
+        contact,
+        pin,
+        email,
+        phone,
+      },
+    };
+    const r = await saveProfile(payload);
+    if (!r.ok) return alert(r.json?.error || 'Save failed');
+    alert('Profile saved');
+    location.href = '/web/bet.html';
+  });
+
+  init();
+</script>
+<script>
+  (function(){
+    const form   = document.getElementById('register-form');
+    const nameEl = document.getElementById('fullName');
+    const emailEl= document.getElementById('email');
+    const phoneEl= document.getElementById('phone');
+    const pinEl  = document.getElementById('pin-top');
+
+    function setErr(el, msg='') {
+      let hint = el?.nextElementSibling;
+      if (!hint || !hint.classList?.contains('hint')) {
+        hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.style.cssText = 'color:#c00;font-size:12px;margin-top:4px';
+        el?.insertAdjacentElement('afterend', hint);
+      }
+      hint.textContent = msg;
+    }
+
+    function validName(v) { return v.trim().length >= 2; }
+    function validEmail(v) { return !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
+    function validPhone(v) { return !v || /^[0-9()+\-\s]{6,}$/.test(v); }
+    function validPin(v) { return /^\d{4,6}$/.test((v || '').trim()); }
+
+    function check() {
+      let ok = true;
+      const n = nameEl?.value || '';
+      const e = emailEl?.value || '';
+      const p = phoneEl?.value || '';
+      const pin = pinEl?.value || '';
+
+      if (!validName(n)) { setErr(nameEl, 'Please enter your full name'); ok = false; } else setErr(nameEl, '');
+
+      if (!p && !e) {
+        setErr(phoneEl, 'Provide a phone number or email');
+        setErr(emailEl, 'Provide an email or phone number');
+        ok = false;
+      } else {
+        if (!validEmail(e)) { setErr(emailEl, 'Invalid email'); ok = false; } else setErr(emailEl, '');
+        if (!validPhone(p)) { setErr(phoneEl, 'Invalid phone'); ok = false; } else setErr(phoneEl, '');
+      }
+
+      if (!validPin(pin)) { setErr(pinEl, 'PIN must be 4–6 digits'); ok = false; } else setErr(pinEl, '');
+
+      return ok;
+    }
+
+    form?.addEventListener('input', check);
+    form?.addEventListener('submit', (e) => {
+      if (!check()) { e.preventDefault(); e.stopPropagation(); }
+    });
+  })();
+</script>
+</body>
+</html>
+

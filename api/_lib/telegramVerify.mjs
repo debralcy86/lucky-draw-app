@@ -1,0 +1,352 @@
+import crypto from 'crypto';
+import { decode as htmlDecode } from 'html-entities';
+
+// Utility: log an 8-char fingerprint of each bot token for debugging (TMA_DEBUG=1)
+const logTokenFingerprint = (token) => {
+  try {
+    const fp = crypto.createHash('sha256')
+      .update(token.trim(), 'utf8')
+      .digest('hex')
+      .slice(0, 8);
+    console.log(`[tma-verify] token fingerprint: ${fp}`);
+  } catch (err) {
+    console.error('[tma-verify] fingerprint error', err);
+  }
+};
+
+/*
+### Overview
+Telegram initData is a short, signed payload the Telegram client passes to your Mini App at launch so your app can identify the user and trust the launch context. For the lucky-draw Mini App the flow is: Telegram client builds initData → front-end receives it and forwards or attaches it to API calls → backend verifies the signature using the bot token → backend returns authenticated user context for drawings, entries, and admin actions.
+
+---
+
+### Frontend Launch and initData creation
+- When a user opens the Mini App inside Telegram the Telegram client generates initData and exposes it to the page via tgWebApp or the SDK.
+- The initData is URL-style key=value pairs joined with & and always includes a hash field that signs the whole payload.
+- Typical keys: auth_date, user (JSON-encoded), chat_instance, chat_type, and hash.
+- The front-end must capture the raw initData string because the backend verification uses the exact canonical form.
+
+---
+
+### Data structure and how the hash is produced
+- Canonical payload: all key=value pairs except the hash, keys sorted lexicographically, each pair rendered as key=value, then joined with newline characters to form data_check_string.
+- Signing secret: derive secret_key = HMAC-SHA256('WebAppData', botToken) raw bytes (legacy fallback uses SHA256(botToken)).
+- Compute HMAC: HMAC-SHA256(secret_key, data_check_string) and hex-encode the result.
+- Provided hash in initData must exactly match that hex HMAC for the payload to be trusted.
+
+---
+
+### Client-side handling in the lucky-draw app
+- On launch, capture the raw initData and forward it to backend endpoints that require authentication.
+- Attach initData to requests via Authorization: tma <initData>, X-Telegram-InitData header, or JSON body { initData }.
+- Actions that require identity (enter draw, claim prize, admin moves) must be validated server-side using verified initData.
+
+---
+
+### Backend verification sequence
+1. Extract raw initData string from header, query, or body.
+2. Parse into key/value pairs and remove only the hash param while saving providedHash.
+3. Produce data_check_string by sorting remaining keys and joining key=value lines with "\n".
+4. For each candidate token (TELEGRAM_BOT_TOKENS list or TELEGRAM_BOT_TOKEN):
+   - Compute secret = SHA256(botToken) raw bytes.
+   - Compute expected = HMAC-SHA256(secret, data_check_string) hex.
+   - If expected === providedHash accept the request and build req.tma (user, userId, isAdmin).
+5. If none match return 401 invalid_init_data.
+6. Enforce admin-only endpoints by checking derived isAdmin or environment ADMIN list.
+
+---
+
+### How this fits lucky-draw features
+- Entry submission: server verifies initData then records the entry with the authenticated userId.
+- One-entry-per-user: rely on verified user.id and auth_date to enforce limits.
+- Admin actions (draw, payout): require verified admin identity and extra server-side checks.
+- Replay protection: check auth_date and optionally reject stale initData or rate-limit.
+
+---
+
+### Security and operational notes
+- Keep the bot token secret; load from TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKENS.
+- Never accept unsigned initData in production; dev bypass only when NODE_ENV !== 'production'.
+- Use Node crypto exactly as described: secret = SHA256(botToken), then HMAC-SHA256 over data_check_string.
+- Log minimal debug info (presence of initData, success/failure) and avoid logging full payloads.
+- When diagnosing mismatches compute expected HMAC locally with candidate tokens.
+
+---
+
+### Quick checklist
+- Frontend: capture raw initData and forward on protected API requests.
+- Backend: canonicalization, hash extraction, SHA256 secret, HMAC check, per-token loop, admin derivation.
+- Env: configure TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_TOKENS.
+- Dev: guard local bypasses and remove before deploying.
+*/
+
+function normalizeToken(token) {
+  if (token == null) return '';
+  let value = String(token).trim();
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1);
+  }
+  return value;
+}
+
+function normalizeTokens(source) {
+  if (!source) return [];
+  if (Array.isArray(source)) {
+    return source
+      .flat()
+      .map(normalizeToken)
+      .filter(Boolean);
+  }
+  return String(source)
+    .split(',')
+    .map(normalizeToken)
+    .filter(Boolean);
+}
+
+function stripWrapperQuotes(value) {
+  if (value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function sanitizeInitDataInput(initDataRaw) {
+  let raw = String(initDataRaw ?? '').trim();
+  if (!raw) return '';
+
+  if (raw.startsWith('Authorization:')) {
+    raw = raw.slice(raw.indexOf(':') + 1).trim();
+  }
+  if (raw.startsWith('tma ')) {
+    raw = raw.slice(4).trim();
+  }
+  if (raw.startsWith('Bearer ')) {
+    raw = raw.slice(7).trim();
+  }
+  if (raw.startsWith('initData=')) {
+    raw = raw.slice('initData='.length).trim();
+  }
+
+  try {
+    raw = htmlDecode(raw);
+  } catch {}
+
+  raw = stripWrapperQuotes(raw.trim());
+  return raw;
+}
+
+function safeDecode(component) {
+  if (component == null) return '';
+  const str = String(component);
+  if (!str) return '';
+  const prepared = str.replace(/\+/g, '%20');
+  try {
+    return decodeURIComponent(prepared);
+  } catch {
+    return str;
+  }
+}
+
+function parseInitData(initDataRaw) {
+  const sanitized = sanitizeInitDataInput(initDataRaw);
+
+  if (process.env.TMA_DEBUG === '1') {
+    try {
+      const preview = sanitized.length > 160 ? sanitized.slice(0, 160) + '...' : sanitized;
+      console.log('[tma-debug][raw-initdata]', { len: sanitized.length, preview });
+    } catch {}
+  }
+
+  if (!sanitized) {
+    return { ok: false, reason: 'empty_init_data' };
+  }
+
+  const qIndex = sanitized.indexOf('?');
+  const query = qIndex === -1 ? sanitized : sanitized.slice(qIndex + 1);
+  const parts = query ? query.split('&') : [];
+
+  const entries = [];
+  const payload = {};
+  let providedHash = '';
+
+  for (const part of parts) {
+    if (!part) continue;
+    const eq = part.indexOf('=');
+    const rawKey = eq === -1 ? part : part.slice(0, eq);
+    const rawValue = eq === -1 ? '' : part.slice(eq + 1);
+    const key = safeDecode(rawKey);
+    let value = safeDecode(rawValue);
+  // NOTE: Do not mutate decoded values. Telegram data_check_string must use the exact
+  // URL-decoded values as received. No extra escaping (e.g., forward slashes) allowed.
+    if (key === 'hash') {
+      providedHash = value || '';
+      continue;
+    }
+
+    entries.push({ key, value });
+    payload[key] = value;
+  }
+
+  if (!providedHash) {
+    return { ok: false, reason: 'missing_hash_signature' };
+  }
+
+  entries.sort((a, b) => a.key.localeCompare(b.key));
+  const dataCheckString = entries.map(({ key, value }) => `${key}=${value}`).join('\n');
+
+  const payloadWithHash = {
+    ...payload,
+    hash: providedHash,
+  };
+
+  return {
+    ok: true,
+    providedHash,
+    dataCheckString,
+    payload: payloadWithHash,
+  };
+}
+
+function compareHashes(providedHash, expectedBuffer) {
+  let providedBuffer;
+  try {
+    providedBuffer = Buffer.from(providedHash, 'hex');
+  } catch {
+    return false;
+  }
+  return (
+    providedBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+  );
+}
+
+export function verifyTelegramInitData(initDataRaw, botToken) {
+  const token = normalizeToken(botToken);
+  if (!token) {
+    return { ok: false, reason: 'missing_bot_token' };
+  }
+
+  const parsed = parseInitData(initDataRaw);
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  // Evaluate both WebAppData and legacy secrets, accepting the first match.
+
+  const secretCandidates = [];
+  try {
+    const secretWebApp = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(Buffer.from(token, 'utf8'))
+      .digest();
+    secretCandidates.push(secretWebApp);
+  } catch (err) {
+    if (process.env.TMA_DEBUG === '1') {
+      console.error('[tma-verify] failed to derive WebAppData secret', err);
+    }
+  }
+
+  try {
+    const legacySecret = crypto.createHash('sha256').update(token, 'utf8').digest();
+    secretCandidates.push(legacySecret);
+  } catch (err) {
+    if (process.env.TMA_DEBUG === '1') {
+      console.error('[tma-verify] failed to derive legacy secret', err);
+    }
+  }
+
+  for (const candidate of secretCandidates) {
+    const expectedBuffer = crypto
+      .createHmac('sha256', candidate)
+      .update(parsed.dataCheckString, 'utf8')
+      .digest();
+
+    if (compareHashes(parsed.providedHash, expectedBuffer)) {
+      let user = null;
+      let authDate = null;
+      try {
+        if (parsed.payload && typeof parsed.payload.user === 'string' && parsed.payload.user.length) {
+          user = JSON.parse(parsed.payload.user);
+        }
+      } catch (err) {
+        if (process.env.TMA_DEBUG === '1') {
+          console.error('[tma-verify] JSON.parse(user) failed', err);
+        }
+      }
+
+      const authRaw = parsed.payload ? parsed.payload.auth_date : null;
+      if (authRaw != null && authRaw !== '') {
+        const n = Number(authRaw);
+        if (Number.isFinite(n)) authDate = n;
+      }
+
+      const paramsObject = { ...parsed.payload };
+      const userId =
+        (user && (user.id ?? user.user_id ?? (user.user && user.user.id))) ??
+        paramsObject.user_id ??
+        null;
+
+      return {
+        ok: true,
+        mode: candidate === secretCandidates[0] ? 'webappdata' : 'legacy',
+        reason: 'hash_match',
+        user,
+        userId,
+        authDate,
+        payload: paramsObject,
+        params: paramsObject,
+        dataCheckString: parsed.dataCheckString,
+        hash: parsed.providedHash,
+        tag: 'telegramVerify/hmac-sha256-2025-10',
+      };
+    }
+  }
+
+  return { ok: false, reason: 'hash_mismatch' };
+}
+
+export function verifyTma(initDataRaw, tokensSource) {
+  let tokens = normalizeTokens(tokensSource);
+  if (!tokens.length) {
+    tokens = normalizeTokens(
+      process.env.TELEGRAM_BOT_TOKENS || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || ''
+    );
+  }
+
+  if (!tokens.length) {
+    return { ok: false, reason: 'missing_bot_token' };
+  }
+
+  // Log fingerprints if debugging is enabled
+  if (process.env.TMA_DEBUG === '1') {
+    (process.env.TELEGRAM_BOT_TOKENS || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '')
+      .split(',')
+      .filter(Boolean)
+      .forEach(logTokenFingerprint);
+  }
+
+  let lastReason = 'hash_mismatch';
+  for (const token of tokens) {
+    const result = verifyTelegramInitData(initDataRaw, token);
+    if (result.ok) {
+      return result;
+    }
+    lastReason = result.reason || lastReason;
+  }
+
+  return { ok: false, reason: lastReason };
+}
+
+export default function verifyInitData(
+  initDataRaw,
+  botToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || ''
+) {
+  return verifyTelegramInitData(initDataRaw, botToken);
+}
+
